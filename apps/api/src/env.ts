@@ -27,6 +27,21 @@ const envSchema = z.object({
   LIVEKIT_API_SECRET: z.string().min(1),
   LIVEKIT_AGENT_NAME: z.string().min(1).default('monibot'),
   MATRIX_WEBHOOK_SECRET: z.string().min(16, 'MATRIX_WEBHOOK_SECRET must be at least 16 characters'),
+  /** Homeserver client-server API, used as the appservice to show the agent in calls. */
+  MATRIX_HOMESERVER_URL: z.url().default('http://127.0.0.1:8008'),
+  /**
+   * Appservice `as_token`. Without it the agent still serves Matrix calls but publishes no
+   * MatrixRTC membership, so Element Call does not show it.
+   */
+  MATRIX_AS_TOKEN: z.preprocess(
+    (value) => (value === '' ? undefined : value),
+    z.string().min(16, 'MATRIX_AS_TOKEN must be at least 16 characters').optional()
+  ),
+  /** The appservice's `sender_localpart` user (docker/synapse/monibot-appservice.template.yaml). */
+  MATRIX_BOT_USER_ID: z
+    .string()
+    .regex(/^@[^:]+:.+$/, 'Expected a Matrix user ID like @monibot:localhost')
+    .default('@monibot:localhost'),
 })
 
 export type Env = z.infer<typeof envSchema>

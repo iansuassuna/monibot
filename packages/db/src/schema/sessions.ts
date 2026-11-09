@@ -26,10 +26,17 @@ export const tutoringSessions = pgTable(
     id: uuid('id').primaryKey().defaultRandom(),
     title: text('title').notNull(),
     matrixRoomId: text('matrix_room_id'),
-    livekitRoomName: text('livekit_room_name').notNull().unique(),
+    // Not unique: lk-jwt-service derives the LiveKit room from the Matrix room alone, so successive
+    // sessions in one Matrix room share it. Dispatch metadata carries the session id instead.
+    livekitRoomName: text('livekit_room_name').notNull(),
     ragEnabled: boolean('rag_enabled').notNull().default(true),
     avatarEnabled: boolean('avatar_enabled').notNull().default(true),
     llmModel: text('llm_model').notNull().default(DEFAULT_LLM_MODEL),
+    /**
+     * Element Call shared E2EE key, sealed by the API (never plaintext); cleared when the session
+     * ends. Null for unencrypted or non-Matrix sessions.
+     */
+    e2eeKeyCiphertext: text('e2ee_key_ciphertext'),
     status: tutoringSessionStatusEnum('status').notNull().default('scheduled'),
     startedAt: timestamp('started_at', { withTimezone: true }),
     endedAt: timestamp('ended_at', { withTimezone: true }),

@@ -22,6 +22,22 @@ export const AGENT_STATES = ['idle', 'listening', 'searching_rag', 'thinking', '
 /** LiveKit DataChannel topic carrying `AgentStateEvent` payloads. */
 export const AGENT_STATE_TOPIC = 'monibot.agent-state'
 
+/** Name the agent shows in LiveKit and, as its Matrix display name, in Element Call. */
+export const AGENT_DISPLAY_NAME = 'MoniBot'
+/** MatrixRTC device of the agent; its LiveKit identity is `<bot user id>:<device>`. */
+export const AGENT_MATRIX_DEVICE_ID = 'MONIBOT'
+
+/** Lifecycle reports the worker sends so the API can mirror its presence as a MatrixRTC member. */
+export const AGENT_PRESENCE_STATES = ['joined', 'heartbeat', 'left'] as const
+/** How often the worker sends `heartbeat`; must stay well below the API's delayed-leave timeout. */
+export const AGENT_PRESENCE_HEARTBEAT_MS = 10_000
+export const AGENT_MATRIX_MEMBERSHIP_OUTCOMES = [
+  'published',
+  'refreshed',
+  'removed',
+  'not_applicable',
+] as const
+
 export const USER_ROLES = ['student', 'researcher'] as const
 
 export const RETRIEVAL_DEFAULT_TOP_K = 4

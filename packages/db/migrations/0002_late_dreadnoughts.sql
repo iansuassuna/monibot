@@ -1,0 +1,1 @@
+ALTER TABLE "tutoring_sessions" ADD COLUMN "e2ee_key_ciphertext" text;

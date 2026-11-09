@@ -1,4 +1,5 @@
 import {
+  agentPresenceSchema,
   createLivekitTokenSchema,
   createTutoringSessionSchema,
   idParamsSchema,
@@ -14,16 +15,20 @@ import {
   requireSession,
   requireUserOrAgent,
 } from '../middlewares/auth.middleware'
-import { requireMatrixWebhookSecret } from '../middlewares/internal-auth.middleware'
+import {
+  requireAgentSecret,
+  requireMatrixWebhookSecret,
+} from '../middlewares/internal-auth.middleware'
 import {
   createParticipantToken,
   ensureAgentDispatched,
   livekitServerUrl,
 } from '../services/livekit.service'
-import { handleCallMemberEvent } from '../services/matrix.service'
+import { handleCallMemberEvent, updateAgentPresence } from '../services/matrix.service'
 import {
   createSession,
   endSession,
+  getAgentE2eeKey,
   getSession,
   getSessionRow,
   listSessions,
@@ -70,4 +75,18 @@ export const sessionsRoutes = new Hono()
   )
   .post('/:id/end', requireResearcher, validate('param', idParamsSchema), async (c) =>
     c.json(success(await endSession(c.req.valid('param').id)), 200)
+  )
+  .get('/:id/e2ee-key', requireAgentSecret, validate('param', idParamsSchema), async (c) =>
+    c.json(success(await getAgentE2eeKey(c.req.valid('param').id)), 200)
+  )
+  .post(
+    '/:id/agent-presence',
+    requireAgentSecret,
+    validate('param', idParamsSchema),
+    validate('json', agentPresenceSchema),
+    async (c) =>
+      c.json(
+        success(await updateAgentPresence(c.req.valid('param').id, c.req.valid('json').state)),
+        200
+      )
   )

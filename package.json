@@ -17,7 +17,9 @@
     "test": "turbo run test",
     "db:generate": "turbo run db:generate --filter=@monibot/db",
     "db:migrate": "turbo run db:migrate --filter=@monibot/db",
-    "db:studio": "bun run --cwd packages/db db:studio"
+    "db:studio": "bun run --cwd packages/db db:studio",
+    "demo:up": "bash docker/demo/element-call-demo.sh up",
+    "demo:down": "bash docker/demo/element-call-demo.sh down"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.15",

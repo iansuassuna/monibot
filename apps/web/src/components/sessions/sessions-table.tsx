@@ -57,6 +57,9 @@ export function SessionsTable() {
                     {session.matrixRoomId && (
                       <span className="block font-mono text-muted-foreground text-xs">
                         {session.matrixRoomId}
+                        {session.e2eeEnabled && (
+                          <span className="font-sans"> · chamada criptografada</span>
+                        )}
                       </span>
                     )}
                   </TableCell>

@@ -3,12 +3,13 @@
  *
  * Usage: bun --env-file=../../.env scripts/e2e.ts
  * Env: API_BASE_URL (default http://localhost:$API_PORT), AGENT_SECRET, MATRIX_WEBHOOK_SECRET,
- * DATABASE_URL, WEB_ORIGIN, E2E_REPORT_PATH (optional JSON report path).
+ * DATABASE_URL, WEB_ORIGIN, E2E_REPORT_PATH (optional JSON report path), MATRIX_BOT_USER_ID
+ * (default @monibot:localhost).
  *
  * Ollama and LiveKit may be offline: the endpoints that need them must then fail with
  * 503 UPSTREAM_UNAVAILABLE, which is asserted instead of the happy path.
  */
-import { createDb, users } from '@monibot/db'
+import { createDb, tutoringSessions, users } from '@monibot/db'
 import { createLogger } from '@monibot/logger'
 import { eq } from 'drizzle-orm'
 
@@ -23,6 +24,7 @@ const required = (name: string) => {
 const baseUrl = process.env.API_BASE_URL ?? `http://localhost:${process.env.API_PORT ?? 3001}`
 const agentSecret = required('AGENT_SECRET')
 const matrixSecret = required('MATRIX_WEBHOOK_SECRET')
+const botUserId = process.env.MATRIX_BOT_USER_ID ?? '@monibot:localhost'
 const webOrigin = required('WEB_ORIGIN')
 const db = createDb(required('DATABASE_URL'), { max: 1 })
 
@@ -437,12 +439,90 @@ await check(
   }
 )
 
+await check('matrix webhook ignores the agent’s own membership (no dispatch loop)', async () => {
+  const { status, json } = await call('/api/sessions/matrix-webhook', {
+    headers: { authorization: `Bearer ${matrixSecret}` },
+    body: { ...memberEvent(matrixRoomId), sender: botUserId },
+  })
+  assert(status === 200, `status ${status}`)
+  const result = dataOf<{ action: string; reason?: string }>(json)
+  assert(result.action === 'ignored', `action ${result.action}`)
+  assert(result.reason === 'Own MatrixRTC membership', `reason ${result.reason}`)
+  return status
+})
+
+await check('agent presence rejects a missing agent secret (401)', async () => {
+  const { status, json } = await call(`/api/sessions/${ragSessionId}/agent-presence`, {
+    body: { state: 'joined' },
+  })
+  assert(status === 401, `status ${status}`)
+  expectEnvelopeError(json, 'UNAUTHORIZED')
+  return status
+})
+
+await check('agent presence is a no-op for a session without a Matrix room', async () => {
+  const { status, json } = await call(`/api/sessions/${audioOnlySessionId}/agent-presence`, {
+    headers: { 'x-agent-secret': agentSecret },
+    body: { state: 'joined' },
+  })
+  assert(status === 200, `status ${status}`)
+  const result = dataOf<{ matrixMembership: string }>(json)
+  assert(result.matrixMembership === 'not_applicable', `outcome ${result.matrixMembership}`)
+  return status
+})
+
 await check(
-  'matrix webhook dispatches the agent for a linked room (or 503 if LiveKit is down)',
+  'agent presence for a room the homeserver cannot join is not_applicable, not 503 (or 503 if Synapse is down)',
+  async () => {
+    const { status, json } = await call(`/api/sessions/${ragSessionId}/agent-presence`, {
+      headers: { 'x-agent-secret': agentSecret },
+      body: { state: 'heartbeat' },
+    })
+    if (status === 503) expectEnvelopeError(json, 'UPSTREAM_UNAVAILABLE')
+    else {
+      const result = dataOf<{ matrixMembership: string }>(json)
+      assert(result.matrixMembership === 'not_applicable', `outcome ${result.matrixMembership}`)
+    }
+    return status
+  }
+)
+
+await check(
+  'matrix webhook does not dispatch for a member not connected to LiveKit (or 503 if LiveKit is down)',
   async () => {
     const { status, json } = await call('/api/sessions/matrix-webhook', {
       headers: { authorization: `Bearer ${matrixSecret}` },
       body: memberEvent(matrixRoomId),
+    })
+    if (status === 503) expectEnvelopeError(json, 'UPSTREAM_UNAVAILABLE')
+    else {
+      const result = dataOf<{ action: string; reason?: string }>(json)
+      assert(result.action === 'ignored', `action ${result.action}`)
+      assert(result.reason === 'Call member is not connected to LiveKit', `reason ${result.reason}`)
+    }
+    return status
+  }
+)
+
+await check(
+  'matrix webhook dispatches the agent into the call’s LiveKit room (or 503 if LiveKit is down)',
+  async () => {
+    const event = memberEvent(matrixRoomId)
+    const { status, json } = await call('/api/sessions/matrix-webhook', {
+      headers: { authorization: `Bearer ${matrixSecret}` },
+      body: {
+        ...event,
+        content: {
+          ...event.content,
+          foci_preferred: [
+            {
+              type: 'livekit',
+              livekit_service_url: 'https://lk-jwt.monibot.test',
+              livekit_alias: `e2e-call-${crypto.randomUUID().slice(0, 8)}`,
+            },
+          ],
+        },
+      },
     })
     if (status === 503) expectEnvelopeError(json, 'UPSTREAM_UNAVAILABLE')
     else assert(dataOf<{ action: string }>(json).action === 'dispatched', 'action dispatched')
@@ -487,6 +567,68 @@ await check(
   }
 )
 
+const callKey = `e2e-${crypto.randomUUID()}`
+let encryptedSessionId = ''
+
+await check('an E2EE key without a Matrix room is rejected (400)', async () => {
+  const { status, json } = await call('/api/sessions', {
+    cookie: researcher,
+    body: { title: 'E2E key without room', e2eeSharedKey: callKey },
+  })
+  assert(status === 400, `status ${status}`)
+  expectEnvelopeError(json, 'VALIDATION_ERROR')
+  return status
+})
+
+await check('an encrypted session never exposes its key and stores it sealed', async () => {
+  const { status, json, text } = await call('/api/sessions', {
+    cookie: researcher,
+    body: {
+      title: 'E2E encrypted call',
+      matrixRoomId: `${matrixRoomId}e2ee`,
+      e2eeSharedKey: callKey,
+    },
+  })
+  assert(status === 201, `status ${status}: ${text}`)
+  const session = dataOf<{ id: string; e2eeEnabled: boolean }>(json)
+  assert(session.e2eeEnabled, 'e2eeEnabled must be true')
+  assert(!text.includes(callKey), 'create response leaks the key')
+  encryptedSessionId = session.id
+  const list = await call('/api/sessions', { cookie: researcher })
+  assert(!list.text.includes(callKey), 'session list leaks the key')
+  const [row] = await db
+    .select({ sealed: tutoringSessions.e2eeKeyCiphertext })
+    .from(tutoringSessions)
+    .where(eq(tutoringSessions.id, encryptedSessionId))
+  assert(row?.sealed && !row.sealed.includes(callKey), 'key must be stored sealed, not in clear')
+  return status
+})
+
+await check('the E2EE key endpoint rejects callers without the agent secret (401)', async () => {
+  const { status, json } = await call(`/api/sessions/${encryptedSessionId}/e2ee-key`, {
+    cookie: researcher,
+  })
+  assert(status === 401, `status ${status}`)
+  expectEnvelopeError(json, 'UNAUTHORIZED')
+  return status
+})
+
+await check('the agent reads the call key; ending the session erases it', async () => {
+  const keyUrl = `/api/sessions/${encryptedSessionId}/e2ee-key`
+  const agent = { headers: { 'x-agent-secret': agentSecret } }
+  const before = await call(keyUrl, agent)
+  assert(before.status === 200, `status ${before.status}`)
+  assert(dataOf<{ sharedKey: string | null }>(before.json).sharedKey === callKey, 'key round-trip')
+  const ended = await call(`/api/sessions/${encryptedSessionId}/end`, {
+    cookie: researcher,
+    method: 'POST',
+  })
+  assert(ended.status === 200, `end status ${ended.status}`)
+  const after = await call(keyUrl, agent)
+  assert(dataOf<{ sharedKey: string | null }>(after.json).sharedKey === null, 'key must be erased')
+  return after.status
+})
+
 await check('researcher ends a session', async () => {
   const { status, json } = await call(`/api/sessions/${audioOnlySessionId}/end`, {
     cookie: researcher,
@@ -496,6 +638,13 @@ await check('researcher ends a session', async () => {
   assert(dataOf<{ status: string }>(json).status === 'ended', 'ended')
   return status
 })
+
+// Fixture sessions point at fake Matrix rooms; left open, the web app lists them as joinable and
+// their agent cannot publish its Matrix presence. Ended even when checks above failed.
+for (const id of [ragSessionId, audioOnlySessionId, encryptedSessionId].filter(Boolean)) {
+  const { status } = await call(`/api/sessions/${id}/end`, { cookie: researcher, method: 'POST' })
+  if (status !== 200) logger.warn('Could not end an e2e fixture session', { sessionId: id, status })
+}
 
 await db.$client.end()
 

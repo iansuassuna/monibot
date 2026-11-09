@@ -1,4 +1,9 @@
 import {
+  type AgentE2eeKey,
+  type AgentPresenceResult,
+  type AgentPresenceState,
+  agentE2eeKeySchema,
+  agentPresenceResultSchema,
   type InteractionLogCreate,
   interactionLogSchema,
   type RetrieveRequest,
@@ -48,6 +53,23 @@ async function request<Schema extends z.ZodType>(
 
 export function fetchSession(sessionId: string): Promise<TutoringSession> {
   return request(`/api/sessions/${sessionId}`, { method: 'GET' }, tutoringSessionSchema)
+}
+
+/** The session's Element Call E2EE key (agent-only endpoint); null for an unencrypted call. */
+export function fetchE2eeKey(sessionId: string): Promise<AgentE2eeKey> {
+  return request(`/api/sessions/${sessionId}/e2ee-key`, { method: 'GET' }, agentE2eeKeySchema)
+}
+
+/** Tells the API the agent joined, is still in, or left the room (Matrix call membership). */
+export function reportAgentPresence(
+  sessionId: string,
+  state: AgentPresenceState
+): Promise<AgentPresenceResult> {
+  return request(
+    `/api/sessions/${sessionId}/agent-presence`,
+    { method: 'POST', body: { state } },
+    agentPresenceResultSchema
+  )
 }
 
 export function retrieveChunks(input: RetrieveRequest): Promise<RetrieveResponse> {

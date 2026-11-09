@@ -40,7 +40,7 @@ podman run -d --name monibot-ollama -e OLLAMA_KEEP_ALIVE=-1 -v monibot-ollama:/r
 podman run -d --name monibot-speaches -e WHISPER__TTL=-1 -v monibot-speaches-cache:/home/ubuntu/.cache/huggingface \
   -p 127.0.0.1:8000:8000 ghcr.io/speaches-ai/speaches:latest-cpu
 podman run -d --name monibot-livekit --network host \
-  docker.io/livekit/livekit-server --dev --bind 0.0.0.0   # host network: see Known limitations
+  docker.io/livekit/livekit-server:v1.13.10 --dev --bind 0.0.0.0   # host network: see Known limitations
 
 # Models
 podman exec monibot-ollama ollama pull nomic-embed-text-v2-moe
@@ -89,7 +89,42 @@ docker compose -f docker/docker-compose.yml --env-file .env up -d --build
 
 ### Through Matrix / Element Call
 
-Create a session with the Matrix room ID. When a participant starts a call in that room, Synapse sends the `m.call.member` event (MSC4143) to the MoniBot application service and the API dispatches the agent into the LiveKit room named by the call's MSC4195 focus. The homeserver → appservice → API → LiveKit → agent path is tested; the Element Call UI and `lk-jwt-service` are configured but not covered by automated tests (see *Known limitations*).
+MoniBot joins an Element Call call as a regular participant: it shows up as **MoniBot** in the call, hears the students and answers, including in end-to-end encrypted calls.
+
+1. Start a call in Element Call and copy its link (*Invite* → *Copy link*).
+2. **Researcher** → *Sessões*: paste the link into *Link da chamada Element Call*. The form fills the Matrix room and, for an encrypted call, captures the call key (the link's `password`). The sessions table then shows *chamada criptografada*.
+3. The student joins the call. Synapse forwards the `m.call.member` event (MSC4143) to the MoniBot application service; the API finds the LiveKit room the student is connected to and dispatches the agent there, with the identity `@monibot:localhost:MONIBOT`.
+4. The worker joins with the call key and reports its presence; the API publishes MoniBot's own MatrixRTC membership, which is what makes Element Call show it. If the worker dies, Synapse withdraws that membership by itself about 30 s later (MSC4140 delayed leave).
+5. Ending the session removes the agent from the call and erases the stored key.
+
+Create the session **before** the student joins. Element Call does not always publish a leave on hang-up, and Synapse drops an identical rejoin, so a student who leaves and rejoins the same call may not bring MoniBot back; start a new call instead.
+
+For a local demonstration, run `bun run demo:up` (see *Local Element Call demo*).
+
+### Local Element Call demo
+
+`lk-jwt-service` validates the caller's Matrix OpenID token over the federation API, which for `server_name: localhost` means HTTPS on port 8448. `bun run demo:up` provides that without disabling TLS verification:
+
+| Container | Role |
+|---|---|
+| `monibot-fed-tls` | Caddy terminating TLS on `:8448` with its own local CA, proxying to Synapse `:8008` |
+| `monibot-lk-jwt` | `lk-jwt-service` trusting the public CAs **plus** that local CA (verification on) |
+| `monibot-element-call` | Element Call on `:8090`, pointed at `127.0.0.1` (rootless Podman resets `::1`) |
+
+It checks each piece, then prints the container table. `bun run demo:down` restores the defaults (no Caddy, `lk-jwt-service` with the image's own trust store, Element Call with `docker/element-call/config.json`). The local CA lives in `docker/demo/.data/` (git-ignored: it holds the CA private key).
+
+Demo run:
+
+```bash
+bun run demo:up && bun run dev:full
+# 1. http://localhost:8090 → start a call, copy its link
+# 2. http://localhost:3000 (researcher) → Sessões → paste the link, create the session
+# 3. join the call in Element Call → MoniBot appears and greets
+podman ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"   # containers screenshot
+bun run demo:down
+```
+
+Before presenting, do not run the API e2e suite or index documents: on a small GPU the embedding model evicts the LLM and the next answer times out while it reloads (`OLLAMA_EMBED_NUM_GPU=0` keeps the embedder on the CPU).
 
 ## Experimental design notes
 
@@ -103,8 +138,8 @@ Create a session with the Matrix room ID. When a participant starts a call in th
 
 ```bash
 bun run typecheck && bunx @biomejs/biome check --write .
-bun run test                                   # unit specs (chunking, SUS, turn telemetry, telemetry delivery)
-bun run --cwd apps/api test:e2e                # 28 HTTP checks (needs api + Postgres; LiveKit/Ollama optional)
+bun run test                                   # unit specs (chunking, SUS, telemetry, MatrixRTC helpers, sealed keys, E2EE watchdog, call links)
+bun run --cwd apps/api test:e2e                # 37 HTTP checks (needs api + Postgres; LiveKit/Ollama optional)
 E2E_STUDENT_EMAIL=… E2E_STUDENT_PASSWORD=… E2E_RESEARCHER_EMAIL=… E2E_RESEARCHER_PASSWORD=… \
   bun run --cwd apps/agent-worker test:voice-e2e <sessionId>   # one spoken turn through the whole stack
 ```
@@ -120,7 +155,9 @@ All settings live in `.env` (see `.env.example`). Notable ones:
 | `BETTER_AUTH_URL` / `WEB_ORIGIN` | `http://localhost:3000` | browser-facing origin |
 | `API_INTERNAL_URL` | `http://localhost:3001` | where the web server reaches the API — **baked in at `next build`** |
 | `AGENT_SECRET` | — | worker ↔ API authentication (`x-agent-secret`) |
-| `MATRIX_WEBHOOK_SECRET` / `MATRIX_AS_TOKEN` | — | appservice `hs_token` / `as_token` |
+| `MATRIX_WEBHOOK_SECRET` / `MATRIX_AS_TOKEN` | — | appservice `hs_token` / `as_token`; without `MATRIX_AS_TOKEN` the API cannot publish MoniBot's call membership, so Element Call does not show it |
+| `MATRIX_HOMESERVER_URL` | `http://127.0.0.1:8008` | Synapse client-server API, used as the appservice bot |
+| `MATRIX_BOT_USER_ID` | `@monibot:localhost` | the appservice's `sender_localpart` user |
 | `OLLAMA_EMBED_MODEL` / `OLLAMA_LLM_MODEL` | `nomic-embed-text-v2-moe` / `llama3.1:8b` | sessions can override the LLM per session |
 | `WHISPER_MODEL` / `TTS_MODEL` | `Systran/faster-whisper-small` / `speaches-ai/piper-pt_BR-faber-medium` | speaches models |
 
@@ -130,7 +167,11 @@ Never set `NODE_ENV` in `.env`: `next build` fails with `NODE_ENV=development`.
 
 - **LiveKit must use host networking** (Linux). Behind rootless-Podman or bridge port forwarding, browsers connect (ICE succeeds) but the media handshake times out (`connect timeout after ICE connected`). The API therefore reaches LiveKit at `host.docker.internal` in Compose and hands browsers `LIVEKIT_PUBLIC_URL`. On macOS/Windows Docker Desktop, host networking behaves differently; publish the ports and set LiveKit's `rtc.node_ip` instead.
 
-- **Element Call end to end** has not been exercised. `lk-jwt-service` validates Matrix OpenID tokens through federation, which needs a resolvable homeserver name (usually a real domain with TLS); the local `server_name: localhost` setup is enough for the appservice path but likely not for Element Call. Also confirm that the LiveKit room name `lk-jwt-service` assigns matches the focus `livekit_alias` the API adopts.
+- **Element Call** is verified locally (Element Call v0.28.0, Synapse 1.163.0, the pinned `lk-jwt-service` build, LiveKit 1.13.10) but has no automated UI test. Upgrading any of them can break the chain; they are pinned in `docker/docker-compose.yml` for that reason. A real deployment needs a resolvable homeserver name with TLS instead of the local Caddy CA.
+- **E2EE**: only Element Call's shared-key mode (call link `password`) is supported. Per-participant keys (Element Web / Element X, keys exchanged over Olm) would need MoniBot to run a full Matrix crypto device. A wrong or missing key fails silently in LiveKit (the audio is digital silence); the worker logs `E2EE key mismatch?` when an unmuted student track stays silent for 5 s.
+- **Rejoining a call**: a student who drops and comes back while MoniBot is still in the room (about 20 s after the last student left) is heard again. Later, once the room has closed, rejoining the same Element Call call may not trigger a new dispatch (identical membership, dropped by Synapse); start a new call.
+- **Network changes break the appservice path** on rootless Podman: `host.containers.internal` keeps the host address from when Synapse started, so after switching networks Synapse can no longer deliver call memberships to the API (no error in the UI; Synapse logs `push_bulk … 504`). `bun run demo:up` detects this (even before the API is running) and restarts Synapse; otherwise run `podman restart monibot-synapse`. Memberships that Synapse delivers late, once the route is back, are treated as replays: the API dispatches the agent only if that member is still connected to LiveKit. After a restart, Synapse resumes the queued transactions only when the next event reaches it (any room), not at boot: until then `application_services_state` stays `down`.
+- **`LOG_LEVEL=debug` logs transcripts**: the LiveKit Agents SDK writes `lk.pii.*` transcript fields at debug level. Use `LOG_LEVEL=info` for real sessions.
 - **Coqui TTS** is not wired in; Piper (through speaches) is the TTS engine.
 - On rootless Podman, `localhost` can resolve to `::1` where published ports may not answer; use `127.0.0.1` in scripts if a request hangs.
 

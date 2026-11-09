@@ -4,17 +4,21 @@ import {
   defineAgent,
   type JobContext,
   type JobProcess,
+  type JobRequest,
   ServerOptions,
   type VAD,
   voice,
 } from '@livekit/agents'
 import * as openai from '@livekit/agents-plugin-openai'
 import * as silero from '@livekit/agents-plugin-silero'
+import type { E2EEOptions } from '@livekit/rtc-node'
 import { createLogger } from '@monibot/logger'
-import { type AgentSource, agentDispatchMetadataSchema } from '@monibot/types'
+import { AGENT_DISPLAY_NAME, type AgentSource, agentDispatchMetadataSchema } from '@monibot/types'
 import { AgentStatePublisher } from './agent-state-publisher'
-import { fetchSession, sendInteractionLog } from './api-client'
+import { fetchE2eeKey, fetchSession, sendInteractionLog } from './api-client'
+import { sharedKeyE2eeOptions, watchStudentAudioDecryption } from './e2ee'
 import { env } from './env'
+import { startMatrixPresence } from './matrix-presence'
 import { TelemetryReporter } from './telemetry-reporter'
 import { TurnTracker } from './turn-tracker'
 import { TutorAgent } from './tutor-agent'
@@ -41,7 +45,15 @@ export default defineAgent<ProcessData>({
       return
     }
 
-    await ctx.connect()
+    // Joining an encrypted call without its key would fail silently (no error, only silence).
+    let e2ee: E2EEOptions | undefined
+    if (session.e2eeEnabled) {
+      const { sharedKey } = await fetchE2eeKey(sessionId)
+      if (!sharedKey) throw new Error(`Session ${sessionId} is encrypted but has no key`)
+      e2ee = sharedKeyE2eeOptions(sharedKey)
+    }
+    watchStudentAudioDecryption(ctx.room, { sessionId, e2eeEnabled: session.e2eeEnabled })
+    await ctx.connect(e2ee)
     const publisher = new AgentStatePublisher(ctx.room)
     const tracker = new TurnTracker({ sessionId, ragEnabled: session.ragEnabled })
     const reporter = new TelemetryReporter(sendInteractionLog, {
@@ -141,6 +153,13 @@ export default defineAgent<ProcessData>({
       logger.error('Agent session error', { sessionId, error })
     })
 
+    // A closed voice session must not leave the job in the room: the agent would stay visible in
+    // the call (MatrixRTC membership kept alive by heartbeats) while no longer listening.
+    agentSession.on(voice.AgentSessionEventTypes.Close, ({ reason }) => {
+      logger.info('Agent session closed; ending the job', { sessionId, reason })
+      ctx.shutdown(`agent session closed: ${reason}`)
+    })
+
     ctx.addShutdownCallback(async () => {
       await reporter.flush()
       if (reporter.pending > 0)
@@ -160,6 +179,11 @@ export default defineAgent<ProcessData>({
         },
       }),
       room: ctx.room,
+      // A student's client reconnecting (network blip, Element Call re-joining) disconnects them
+      // with CLIENT_INITIATED; the SDK default would close the session for good. Keep it open:
+      // RoomIO relinks the same identity when it returns, and once only the agent is left
+      // LiveKit closes the room, which ends the job.
+      inputOptions: { closeOnDisconnect: false },
     })
     logger.info('MoniBot joined the room', {
       sessionId,
@@ -168,10 +192,31 @@ export default defineAgent<ProcessData>({
       avatarEnabled: session.avatarEnabled,
       llmModel: session.llmModel,
     })
+    if (session.matrixRoomId) ctx.addShutdownCallback(startMatrixPresence(sessionId))
     agentSession.say(GREETING)
   },
 })
 
+/**
+ * Joins with the identity the API chose (Matrix calls need the agent's MatrixRTC identity);
+ * malformed metadata falls back to the SDK default and fails loudly in `entry`.
+ */
+async function acceptJob(request: JobRequest): Promise<void> {
+  let identity = ''
+  try {
+    identity =
+      agentDispatchMetadataSchema.safeParse(JSON.parse(request.job.metadata || '{}')).data
+        ?.participantIdentity ?? ''
+  } catch {
+    identity = ''
+  }
+  await request.accept(AGENT_DISPLAY_NAME, identity)
+}
+
 cli.runApp(
-  new ServerOptions({ agent: fileURLToPath(import.meta.url), agentName: env.LIVEKIT_AGENT_NAME })
+  new ServerOptions({
+    agent: fileURLToPath(import.meta.url),
+    agentName: env.LIVEKIT_AGENT_NAME,
+    requestFunc: acceptJob,
+  })
 )
