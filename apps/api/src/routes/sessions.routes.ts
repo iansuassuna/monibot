@@ -24,7 +24,11 @@ import {
   ensureAgentDispatched,
   livekitServerUrl,
 } from '../services/livekit.service'
-import { handleCallMemberEvent, updateAgentPresence } from '../services/matrix.service'
+import {
+  agentIdentityForSession,
+  handleCallMemberEvent,
+  updateAgentPresence,
+} from '../services/matrix.service'
 import {
   createSession,
   endSession,
@@ -63,7 +67,10 @@ export const sessionsRoutes = new Hono()
         identity: c.var.user.id,
         name: c.req.valid('json').participantName,
       })
-      await ensureAgentDispatched(session.livekitRoomName, { sessionId: session.id })
+      await ensureAgentDispatched(session.livekitRoomName, {
+        sessionId: session.id,
+        participantIdentity: agentIdentityForSession(session),
+      })
       const data: LivekitToken = {
         token,
         serverUrl: livekitServerUrl,

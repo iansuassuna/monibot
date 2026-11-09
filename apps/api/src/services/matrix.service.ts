@@ -1,4 +1,4 @@
-import { getDb, tutoringSessions } from '@monibot/db'
+import { getDb, type TutoringSessionRow, tutoringSessions } from '@monibot/db'
 import { createLogger } from '@monibot/logger'
 import {
   AGENT_DISPLAY_NAME,
@@ -93,6 +93,17 @@ async function resolveCallRoom(
 }
 
 /**
+ * LiveKit identity the agent must join a session with. A Matrix-linked session always gets the
+ * identity its MatrixRTC membership announces, whichever path dispatched the agent (Element Call
+ * or the web app's token): with any other identity Element Call would hide it. Undefined lets the
+ * SDK pick one.
+ */
+export function agentIdentityForSession(session: TutoringSessionRow): string | undefined {
+  if (!session.matrixRoomId || !isMatrixAppserviceConfigured()) return undefined
+  return agentLivekitIdentity(env.MATRIX_BOT_USER_ID)
+}
+
+/**
  * Reacts to a MatrixRTC call membership by dispatching MoniBot into the LiveKit room of the
  * newest non-ended tutoring session linked to that Matrix room.
  */
@@ -136,9 +147,7 @@ export async function handleCallMemberEvent(
   const active = await markSessionActive(target)
   await ensureAgentDispatched(active.livekitRoomName, {
     sessionId: active.id,
-    participantIdentity: isMatrixAppserviceConfigured()
-      ? agentLivekitIdentity(env.MATRIX_BOT_USER_ID)
-      : undefined,
+    participantIdentity: agentIdentityForSession(active),
   })
   logger.info('Agent dispatched from MatrixRTC membership', {
     sessionId: active.id,
