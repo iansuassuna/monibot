@@ -1,0 +1,4 @@
+{
+  "extends": "@monibot/tsconfig/bun.json",
+  "include": ["src/**/*.ts", "drizzle.config.ts"]
+}

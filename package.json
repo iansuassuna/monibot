@@ -1,0 +1,28 @@
+{
+  "name": "monibot",
+  "private": true,
+  "packageManager": "bun@1.4.3",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "turbo run dev --filter=@monibot/web --filter=@monibot/api",
+    "dev:full": "turbo run dev --filter=@monibot/web --filter=@monibot/api --filter=@monibot/agent-worker",
+    "build": "turbo run build",
+    "typecheck": "turbo run typecheck",
+    "lint": "biome check --write .",
+    "lint:check": "biome check .",
+    "format": "biome format --write .",
+    "test": "turbo run test",
+    "db:generate": "turbo run db:generate --filter=@monibot/db",
+    "db:migrate": "turbo run db:migrate --filter=@monibot/db",
+    "db:studio": "bun run --cwd packages/db db:studio"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.15",
+    "@types/bun": "1.4.3",
+    "turbo": "2.11.9",
+    "typescript": "7.0.2"
+  }
+}

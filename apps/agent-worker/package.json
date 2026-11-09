@@ -1,0 +1,28 @@
+{
+  "name": "@monibot/agent-worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun --env-file=../../.env run src/main.ts dev",
+    "start": "bun --env-file=../../.env run src/main.ts start",
+    "typecheck": "tsc --noEmit",
+    "lint": "biome check --write .",
+    "lint:check": "biome check .",
+    "test": "bun test",
+    "test:voice-e2e": "bun --env-file=../../.env scripts/voice-e2e.ts"
+  },
+  "dependencies": {
+    "@livekit/agents": "1.9.3",
+    "@livekit/agents-plugin-openai": "1.9.3",
+    "@livekit/agents-plugin-silero": "1.9.3",
+    "@livekit/rtc-node": "1.1.0",
+    "@monibot/logger": "workspace:*",
+    "@monibot/types": "workspace:*",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@monibot/tsconfig": "workspace:*",
+    "@types/node": "26.6.5"
+  }
+}

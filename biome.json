@@ -1,0 +1,95 @@
+{
+  "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
+  "vcs": { "enabled": false, "clientKind": "git", "useIgnoreFile": false },
+  "files": {
+    "ignoreUnknown": true,
+    "includes": [
+      "**",
+      "!**/node_modules",
+      "!**/.next",
+      "!**/next-env.d.ts",
+      "!**/.turbo",
+      "!**/dist",
+      "!**/build",
+      "!**/out",
+      "!**/coverage",
+      "!**/migrations/meta",
+      "!**/src/components/ui",
+      "!**/.env*",
+      "!docker/data"
+    ]
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineEnding": "lf",
+    "lineWidth": 100,
+    "bracketSpacing": true
+  },
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "single",
+      "jsxQuoteStyle": "double",
+      "semicolons": "asNeeded",
+      "trailingCommas": "es5",
+      "arrowParentheses": "always"
+    }
+  },
+  "css": {
+    "parser": { "tailwindDirectives": true }
+  },
+  "json": {
+    "formatter": { "trailingCommas": "none" }
+  },
+  "assist": {
+    "actions": {
+      "source": {
+        "organizeImports": "on"
+      }
+    }
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "recommended",
+      "suspicious": {
+        "noExplicitAny": "error",
+        "noConsole": { "level": "error", "options": { "allow": [] } }
+      },
+      "correctness": {
+        "noUnusedImports": "error",
+        "noUnusedVariables": { "level": "error", "options": { "ignoreRestSiblings": true } },
+        "noUnusedFunctionParameters": "error"
+      },
+      "style": {
+        "noNonNullAssertion": "error",
+        "useImportType": "error",
+        "useExportType": "error",
+        "useConst": "error",
+        "useAsConstAssertion": "error",
+        "useNodejsImportProtocol": "error",
+        "noInferrableTypes": "error",
+        "noUselessElse": "error",
+        "useFilenamingConvention": {
+          "level": "error",
+          "options": { "filenameCases": ["kebab-case"], "requireAscii": true }
+        }
+      },
+      "performance": {
+        "noAccumulatingSpread": "error",
+        "noDelete": "error"
+      }
+    }
+  },
+  "overrides": [
+    {
+      "includes": ["packages/logger/src/**"],
+      "linter": { "rules": { "suspicious": { "noConsole": "off" } } }
+    },
+    {
+      "includes": ["**/*.md"],
+      "formatter": { "enabled": false }
+    }
+  ]
+}

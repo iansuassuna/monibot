@@ -1,0 +1,4 @@
+{
+  "extends": "@monibot/tsconfig/library.json",
+  "include": ["src/**/*.ts"]
+}

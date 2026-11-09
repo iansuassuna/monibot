@@ -1,0 +1,36 @@
+{
+  "name": "@monibot/db",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./schema": {
+      "types": "./src/schema/index.ts",
+      "default": "./src/schema/index.ts"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "biome check --write .",
+    "lint:check": "biome check .",
+    "db:generate": "drizzle-kit generate --config=./drizzle.config.ts",
+    "db:migrate": "bun --env-file=../../.env run ./src/migrate.ts",
+    "db:push": "bun --env-file=../../.env run drizzle-kit push --config=./drizzle.config.ts",
+    "db:studio": "bun --env-file=../../.env run drizzle-kit studio --config=./drizzle.config.ts"
+  },
+  "dependencies": {
+    "@monibot/logger": "workspace:*",
+    "@monibot/types": "workspace:*",
+    "drizzle-orm": "0.45.4",
+    "postgres": "3.4.9",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@monibot/tsconfig": "workspace:*",
+    "drizzle-kit": "0.31.11"
+  }
+}

@@ -1,0 +1,16 @@
+# MoniBot application service: receives MatrixRTC call memberships from every room so the API can
+# dispatch the tutor agent. Tokens are filled from env by start.sh.
+id: monibot
+url: "__MONIBOT_API_URL__"
+as_token: "__MATRIX_AS_TOKEN__"
+hs_token: "__MATRIX_HS_TOKEN__"
+sender_localpart: monibot
+rate_limited: false
+namespaces:
+  users:
+    - exclusive: true
+      regex: "@monibot:localhost"
+  rooms:
+    - exclusive: false
+      regex: ".*"
+  aliases: []

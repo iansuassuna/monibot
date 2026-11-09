@@ -1,0 +1,52 @@
+# Local development homeserver for MoniBot (MatrixRTC: MSC4143 call membership, MSC4195 LiveKit foci).
+server_name: "localhost"
+public_baseurl: "http://localhost:8008/"
+pid_file: /data/homeserver.pid
+listeners:
+  - port: 8008
+    type: http
+    tls: false
+    x_forwarded: true
+    bind_addresses: ["0.0.0.0"]
+    resources:
+      - names: [client, federation, openid]
+        compress: false
+database:
+  name: sqlite3
+  args:
+    database: /data/homeserver.db
+log_config: /config/log.config
+media_store_path: /data/media_store
+signing_key_path: /data/localhost.signing.key
+trusted_key_servers: []
+report_stats: false
+suppress_key_server_warning: true
+
+# Open registration is for local testing only.
+enable_registration: true
+enable_registration_without_verification: true
+
+app_service_config_files:
+  - /data/monibot-appservice.yaml
+
+# MatrixRTC requirements (Element Call): room summaries, state_after, delayed events.
+experimental_features:
+  msc3266_enabled: true
+  msc4222_enabled: true
+  msc4140_enabled: true
+max_event_delay_duration: 24h
+# Room v12 rejects the creator in power_levels.users, which Element Call's createRoom sends.
+default_room_version: "11"
+rc_message:
+  per_second: 0.5
+  burst_count: 30
+rc_delayed_event_mgmt:
+  per_second: 1
+  burst_count: 20
+
+# Advertise the LiveKit focus (lk-jwt-service) to MatrixRTC clients.
+serve_server_wellknown: true
+extra_well_known_client_content:
+  org.matrix.msc4143.rtc_foci:
+    - type: livekit
+      livekit_service_url: "http://localhost:8080"

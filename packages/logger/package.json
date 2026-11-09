@@ -1,0 +1,21 @@
+{
+  "name": "@monibot/logger",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "biome check --write .",
+    "lint:check": "biome check ."
+  },
+  "devDependencies": {
+    "@monibot/tsconfig": "workspace:*"
+  }
+}

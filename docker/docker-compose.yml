@@ -1,0 +1,167 @@
+# MoniBot — self-hosted stack for local research sessions.
+#
+#   cp .env.example .env   # then fill the secrets
+#   docker compose -f docker/docker-compose.yml --env-file .env up -d --build
+#
+# Ports on the host: web 3000 · api 3001 · livekit 7880/7881/7882udp · ollama 11434 ·
+# speaches 8000 · synapse 8008 · lk-jwt-service 8080 · element-call 8090.
+name: monibot
+
+x-app-env: &app-env
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+  DATABASE_URL: postgres://monibot:monibot@postgres:5432/monibot
+  BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?set BETTER_AUTH_SECRET in .env}
+  BETTER_AUTH_URL: ${BETTER_AUTH_URL:-http://localhost:3000}
+  WEB_ORIGIN: ${WEB_ORIGIN:-http://localhost:3000}
+  API_INTERNAL_URL: http://api:3001
+  AGENT_SECRET: ${AGENT_SECRET:?set AGENT_SECRET in .env}
+  MATRIX_WEBHOOK_SECRET: ${MATRIX_WEBHOOK_SECRET:?set MATRIX_WEBHOOK_SECRET in .env}
+  OLLAMA_BASE_URL: http://ollama:11434
+  OLLAMA_EMBED_MODEL: ${OLLAMA_EMBED_MODEL:-nomic-embed-text-v2-moe}
+  OLLAMA_LLM_MODEL: ${OLLAMA_LLM_MODEL:-llama3.1:8b}
+  OLLAMA_EMBED_NUM_GPU: ${OLLAMA_EMBED_NUM_GPU:-}
+  LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-devkey}
+  LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-secret}
+  LIVEKIT_AGENT_NAME: ${LIVEKIT_AGENT_NAME:-monibot}
+
+services:
+  postgres:
+    image: docker.io/pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: monibot
+      POSTGRES_PASSWORD: monibot
+      POSTGRES_DB: monibot
+    volumes: [postgres-data:/var/lib/postgresql/data]
+    ports: ["127.0.0.1:5432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U monibot -d monibot"]
+      interval: 5s
+      retries: 20
+
+  ollama:
+    image: docker.io/ollama/ollama:latest
+    environment:
+      # Keep models resident: a cold load would inflate the measured RAG/LLM latencies.
+      OLLAMA_KEEP_ALIVE: "-1"
+    volumes: [ollama-data:/root/.ollama]
+    ports: ["127.0.0.1:11434:11434"]
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      retries: 30
+
+  ollama-init:
+    image: docker.io/ollama/ollama:latest
+    depends_on:
+      ollama: { condition: service_healthy }
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    entrypoint: ["sh", "-c"]
+    command:
+      - ollama pull ${OLLAMA_EMBED_MODEL:-nomic-embed-text-v2-moe} && ollama pull ${OLLAMA_LLM_MODEL:-llama3.1:8b}
+    restart: "no"
+
+  speaches:
+    # OpenAI-compatible faster-whisper (STT) + Piper (TTS). Use the `latest-cuda` tag with a GPU.
+    image: ghcr.io/speaches-ai/speaches:latest-cpu
+    environment:
+      WHISPER__TTL: "-1"
+    volumes: [speaches-cache:/home/ubuntu/.cache/huggingface]
+    ports: ["127.0.0.1:8000:8000"]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health"]
+      interval: 10s
+      retries: 30
+
+  speaches-init:
+    image: docker.io/curlimages/curl:8.11.1
+    depends_on:
+      speaches: { condition: service_healthy }
+    entrypoint: ["sh", "-c"]
+    command:
+      - >-
+        curl -fsS -X POST http://speaches:8000/v1/models/${WHISPER_MODEL:-Systran/faster-whisper-small} &&
+        curl -fsS -X POST http://speaches:8000/v1/models/${TTS_MODEL:-speaches-ai/piper-pt_BR-faber-medium}
+    restart: "no"
+
+  livekit:
+    # Dev mode (keys devkey/secret). For a deployment, mount a livekit.yaml with real keys.
+    # Host networking: WebRTC media through rootless/bridge UDP port forwarding fails the DTLS
+    # handshake after ICE connects ("connect timeout after ICE connected"). Linux hosts only.
+    image: docker.io/livekit/livekit-server:latest
+    command: ["--dev", "--bind", "0.0.0.0"]
+    network_mode: host
+
+  synapse:
+    image: docker.io/matrixdotorg/synapse:latest
+    entrypoint: ["/bin/sh", "/config/start.sh"]
+    environment:
+      MATRIX_AS_TOKEN: ${MATRIX_AS_TOKEN:?set MATRIX_AS_TOKEN in .env}
+      MATRIX_WEBHOOK_SECRET: ${MATRIX_WEBHOOK_SECRET}
+      MONIBOT_API_URL: http://api:3001/api/matrix
+    volumes:
+      - ./synapse:/config:ro
+      - synapse-data:/data
+    ports: ["8008:8008"]
+
+  lk-jwt-service:
+    # Issues LiveKit tokens to Element Call users from their Matrix OpenID token (MSC4195).
+    image: ghcr.io/element-hq/lk-jwt-service:latest
+    environment:
+      LIVEKIT_JWT_PORT: "8080"
+      LIVEKIT_URL: ws://localhost:7880
+      LIVEKIT_KEY: ${LIVEKIT_API_KEY:-devkey}
+      LIVEKIT_SECRET: ${LIVEKIT_API_SECRET:-secret}
+      LIVEKIT_FULL_ACCESS_HOMESERVERS: localhost
+    ports: ["8080:8080"]
+
+  element-call:
+    image: ghcr.io/element-hq/element-call:latest
+    volumes: [./element-call/config.json:/app/config.json:ro]
+    ports: ["8090:8080"]
+
+  api:
+    build: { context: .., dockerfile: docker/Dockerfile, target: api }
+    init: true
+    environment:
+      <<: *app-env
+      API_PORT: "3001"
+      LIVEKIT_URL: ws://host.docker.internal:7880
+      LIVEKIT_PUBLIC_URL: ${LIVEKIT_PUBLIC_URL:-ws://localhost:7880}
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    depends_on:
+      postgres: { condition: service_healthy }
+    ports: ["3001:3001"]
+
+  web:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: web
+      args: { API_INTERNAL_URL: http://api:3001 }
+    init: true
+    environment:
+      <<: *app-env
+    depends_on: [api]
+    ports: ["3000:3000"]
+
+  agent-worker:
+    build: { context: .., dockerfile: docker/Dockerfile, target: agent-worker }
+    init: true
+    # Let in-progress sessions finish and buffered telemetry flush before the worker exits.
+    stop_grace_period: 2m
+    environment:
+      <<: *app-env
+      LIVEKIT_URL: ws://host.docker.internal:7880
+      SPEACHES_BASE_URL: http://speaches:8000
+      WHISPER_MODEL: ${WHISPER_MODEL:-Systran/faster-whisper-small}
+      STT_LANGUAGE: ${STT_LANGUAGE:-pt}
+      TTS_MODEL: ${TTS_MODEL:-speaches-ai/piper-pt_BR-faber-medium}
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    depends_on: [api, livekit, speaches, ollama]
+
+volumes:
+  postgres-data:
+  ollama-data:
+  speaches-cache:
+  synapse-data:
