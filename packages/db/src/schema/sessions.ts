@@ -1,4 +1,5 @@
 import {
+  CALL_CLIENTS,
   DEFAULT_LLM_MODEL,
   type RetrievedChunkRef,
   TUTORING_SESSION_STATUSES,
@@ -20,16 +21,27 @@ export const tutoringSessionStatusEnum = pgEnum(
   TUTORING_SESSION_STATUSES
 )
 
+export const callClientEnum = pgEnum('call_client', CALL_CLIENTS)
+
 export const tutoringSessions = pgTable(
   'tutoring_sessions',
   {
     id: uuid('id').primaryKey().defaultRandom(),
     title: text('title').notNull(),
     matrixRoomId: text('matrix_room_id'),
-    livekitRoomName: text('livekit_room_name').notNull().unique(),
+    // Not unique: lk-jwt-service derives the LiveKit room from the Matrix room alone, so successive
+    // sessions in one Matrix room share it. Dispatch metadata carries the session id instead.
+    livekitRoomName: text('livekit_room_name').notNull(),
     ragEnabled: boolean('rag_enabled').notNull().default(true),
     avatarEnabled: boolean('avatar_enabled').notNull().default(true),
     llmModel: text('llm_model').notNull().default(DEFAULT_LLM_MODEL),
+    /**
+     * Element Call shared E2EE key, sealed by the API (never plaintext); cleared when the session
+     * ends. Null for unencrypted or non-Matrix sessions.
+     */
+    e2eeKeyCiphertext: text('e2ee_key_ciphertext'),
+    /** Methodology flag: the call client, set at creation from whether the session has a Matrix room. */
+    callClient: callClientEnum('call_client').notNull().default('livekit_web'),
     status: tutoringSessionStatusEnum('status').notNull().default('scheduled'),
     startedAt: timestamp('started_at', { withTimezone: true }),
     endedAt: timestamp('ended_at', { withTimezone: true }),

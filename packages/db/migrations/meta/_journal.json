@@ -8,6 +8,27 @@
       "when": 1792194426587,
       "tag": "0000_init",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1794237497292,
+      "tag": "0001_natural_killer_shrike",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1794239070899,
+      "tag": "0002_late_dreadnoughts",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1794281012208,
+      "tag": "0003_illegal_squadron_supreme",
+      "breakpoints": true
     }
   ]
 }

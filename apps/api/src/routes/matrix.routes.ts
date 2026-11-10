@@ -5,6 +5,7 @@ import {
   matrixTransactionSchema,
 } from '@monibot/types'
 import { Hono } from 'hono'
+import { RecentIds } from '../lib/recent-ids'
 import { validate } from '../lib/validate'
 import { requireMatrixWebhookSecret } from '../middlewares/internal-auth.middleware'
 import { handleCallMemberEvent } from '../services/matrix.service'
@@ -12,6 +13,12 @@ import { handleCallMemberEvent } from '../services/matrix.service'
 const logger = createLogger('MatrixAppService')
 
 const CALL_MEMBER_TYPES = new Set(['m.call.member', 'org.matrix.msc3401.call.member'])
+
+/**
+ * The homeserver resends a whole transaction when it did not see our answer in time, so events
+ * already handled must not dispatch the agent again.
+ */
+const handledEventIds = new RecentIds(1000)
 
 /**
  * Matrix Application Service endpoints (the homeserver appends `/_matrix/app/v1/...` to the
@@ -33,6 +40,10 @@ export const matrixRoutes = new Hono()
             txnId,
             issues: event.error.issues,
           })
+          continue
+        }
+        if (event.data.event_id && !handledEventIds.markSeen(event.data.event_id)) {
+          logger.info('Skipped an already handled call membership', { txnId })
           continue
         }
         // One failing event must not fail the transaction, or the homeserver retries it forever.

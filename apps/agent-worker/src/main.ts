@@ -4,17 +4,23 @@ import {
   defineAgent,
   type JobContext,
   type JobProcess,
+  type JobRequest,
   ServerOptions,
   type VAD,
   voice,
 } from '@livekit/agents'
 import * as openai from '@livekit/agents-plugin-openai'
 import * as silero from '@livekit/agents-plugin-silero'
+import type { E2EEOptions } from '@livekit/rtc-node'
 import { createLogger } from '@monibot/logger'
-import { type AgentSource, agentDispatchMetadataSchema } from '@monibot/types'
+import { AGENT_DISPLAY_NAME, type AgentSource, agentDispatchMetadataSchema } from '@monibot/types'
 import { AgentStatePublisher } from './agent-state-publisher'
-import { fetchSession, sendInteractionLog } from './api-client'
+import { fetchE2eeKey, fetchSession, sendAgentEvent, sendInteractionLog } from './api-client'
+import { publishAvatarVideo } from './avatar/avatar-video'
+import { MouthEnvelope } from './avatar/mouth-envelope'
+import { sharedKeyE2eeOptions, watchStudentAudioDecryption } from './e2ee'
 import { env } from './env'
+import { startMatrixPresence } from './matrix-presence'
 import { TelemetryReporter } from './telemetry-reporter'
 import { TurnTracker } from './turn-tracker'
 import { TutorAgent } from './tutor-agent'
@@ -23,6 +29,9 @@ const logger = createLogger('AgentWorker')
 
 const GREETING =
   'Olá! Eu sou o MoniBot, monitor de Fundamentos de Programação. Qual é a sua dúvida?'
+
+/** Time to the LLM's first token before the SDK aborts and retries (its default is 10 s). */
+const LLM_TIMEOUT_MS = 30_000
 
 interface ProcessData extends Record<string, unknown> {
   vad: VAD
@@ -41,8 +50,22 @@ export default defineAgent<ProcessData>({
       return
     }
 
-    await ctx.connect()
-    const publisher = new AgentStatePublisher(ctx.room)
+    // Joining an encrypted call without its key would fail silently (no error, only silence).
+    let e2ee: E2EEOptions | undefined
+    if (session.e2eeEnabled) {
+      const { sharedKey } = await fetchE2eeKey(sessionId)
+      if (!sharedKey) throw new Error(`Session ${sessionId} is encrypted but has no key`)
+      e2ee = sharedKeyE2eeOptions(sharedKey)
+    }
+    watchStudentAudioDecryption(ctx.room, { sessionId, e2eeEnabled: session.e2eeEnabled })
+    await ctx.connect(e2ee)
+    const inElementCall = session.callClient === 'element_call'
+    // An Element Call page is not in the LiveKit room: it follows the agent through the API's
+    // live stream instead of the DataChannel.
+    const publisher = new AgentStatePublisher(
+      ctx.room,
+      inElementCall ? (event) => sendAgentEvent(sessionId, event) : undefined
+    )
     const tracker = new TurnTracker({ sessionId, ragEnabled: session.ragEnabled })
     const reporter = new TelemetryReporter(sendInteractionLog, {
       onDropped: (_log, error) =>
@@ -55,6 +78,9 @@ export default defineAgent<ProcessData>({
         logger.error('Telemetry upload failed; turn kept in buffer', { sessionId, error }),
     })
     let sources: AgentSource[] = []
+    // Avatar condition in an Element Call call: MoniBot's face is its video tile. In a direct
+    // LiveKit room the web page draws the avatar itself, so no video is published there.
+    const mouth = session.avatarEnabled && inElementCall ? new MouthEnvelope() : undefined
 
     const agentSession = new voice.AgentSession({
       vad: ctx.proc.userData.vad,
@@ -77,6 +103,10 @@ export default defineAgent<ProcessData>({
         apiKey: 'local',
         model: env.TTS_MODEL,
       }),
+      // On a small GPU llama3.1:8b runs mostly on the CPU, so a long prompt can take more than the
+      // SDK's default 10 s to its first token; the abort and retry then add seconds to the turn,
+      // and three in a row fail it.
+      connOptions: { llmConnOptions: { timeoutMs: LLM_TIMEOUT_MS } },
       // Local-only: VAD end-of-turn and VAD-based interruptions (the adaptive detector is a hosted model).
       turnHandling: { turnDetection: 'vad', interruption: { mode: 'vad' } },
     })
@@ -112,6 +142,8 @@ export default defineAgent<ProcessData>({
     })
 
     agentSession.on(voice.AgentSessionEventTypes.AgentStateChanged, ({ newState, createdAt }) => {
+      if (newState === 'speaking') mouth?.startPlayback(Date.now())
+      else mouth?.stop()
       if (newState === 'speaking') {
         tracker.onAgentSpeaking(createdAt)
         publisher.publish({ state: 'speaking', sources })
@@ -141,6 +173,13 @@ export default defineAgent<ProcessData>({
       logger.error('Agent session error', { sessionId, error })
     })
 
+    // A closed voice session must not leave the job in the room: the agent would stay visible in
+    // the call (MatrixRTC membership kept alive by heartbeats) while no longer listening.
+    agentSession.on(voice.AgentSessionEventTypes.Close, ({ reason }) => {
+      logger.info('Agent session closed; ending the job', { sessionId, reason })
+      ctx.shutdown(`agent session closed: ${reason}`)
+    })
+
     ctx.addShutdownCallback(async () => {
       await reporter.flush()
       if (reporter.pending > 0)
@@ -158,8 +197,14 @@ export default defineAgent<ProcessData>({
         onSources: (next) => {
           sources = next
         },
+        mouth,
       }),
       room: ctx.room,
+      // A student's client reconnecting (network blip, Element Call re-joining) disconnects them
+      // with CLIENT_INITIATED; the SDK default would close the session for good. Keep it open:
+      // RoomIO relinks the same identity when it returns, and once only the agent is left
+      // LiveKit closes the room, which ends the job.
+      inputOptions: { closeOnDisconnect: false },
     })
     logger.info('MoniBot joined the room', {
       sessionId,
@@ -168,10 +213,39 @@ export default defineAgent<ProcessData>({
       avatarEnabled: session.avatarEnabled,
       llmModel: session.llmModel,
     })
+    if (session.matrixRoomId) ctx.addShutdownCallback(startMatrixPresence(sessionId))
+    if (mouth) {
+      const stopAvatar = await publishAvatarVideo(ctx.room, {
+        sessionId,
+        state: () => publisher.state,
+        mouth,
+      })
+      ctx.addShutdownCallback(stopAvatar)
+    }
     agentSession.say(GREETING)
   },
 })
 
+/**
+ * Joins with the identity the API chose (Matrix calls need the agent's MatrixRTC identity);
+ * malformed metadata falls back to the SDK default and fails loudly in `entry`.
+ */
+async function acceptJob(request: JobRequest): Promise<void> {
+  let identity = ''
+  try {
+    identity =
+      agentDispatchMetadataSchema.safeParse(JSON.parse(request.job.metadata || '{}')).data
+        ?.participantIdentity ?? ''
+  } catch {
+    identity = ''
+  }
+  await request.accept(AGENT_DISPLAY_NAME, identity)
+}
+
 cli.runApp(
-  new ServerOptions({ agent: fileURLToPath(import.meta.url), agentName: env.LIVEKIT_AGENT_NAME })
+  new ServerOptions({
+    agent: fileURLToPath(import.meta.url),
+    agentName: env.LIVEKIT_AGENT_NAME,
+    requestFunc: acceptJob,
+  })
 )

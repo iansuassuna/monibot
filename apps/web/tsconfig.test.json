@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": ["node", "bun"],
+    "incremental": false
+  },
+  "include": ["src/**/*.test.ts"],
+  "exclude": ["node_modules", ".next"]
+}

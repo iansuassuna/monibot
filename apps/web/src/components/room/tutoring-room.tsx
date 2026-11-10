@@ -14,6 +14,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { useLivekitToken, useSession } from '@/hooks/queries/sessions'
 import { describeError } from '@/lib/errors'
 import { useAgentStateStore } from '@/stores/agent-state-store'
+import { ElementCallRoom } from './element-call-room'
 import { RoomStage } from './room-stage'
 
 interface TutoringRoomProps {
@@ -45,6 +46,11 @@ export function TutoringRoom({ sessionId, defaultParticipantName }: TutoringRoom
         </a>
       </Alert>
     )
+  }
+
+  // Matrix sessions are MatrixRTC calls: the student joins through embedded Element Call.
+  if (session.data.matrixRoomId) {
+    return <ElementCallRoom sessionId={sessionId} sessionTitle={session.data.title} />
   }
 
   if (token.data) {

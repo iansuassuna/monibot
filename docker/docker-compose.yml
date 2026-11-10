@@ -5,6 +5,10 @@
 #
 # Ports on the host: web 3000 · api 3001 · livekit 7880/7881/7882udp · ollama 11434 ·
 # speaches 8000 · synapse 8008 · lk-jwt-service 8080 · element-call 8090.
+#
+# The MatrixRTC chain (LiveKit, Synapse, lk-jwt-service, Element Call) is pinned to the versions
+# verified together; `latest` broke it twice (room v12 power levels, multi-SFU room naming).
+# Upgrade them together and re-run the Element Call checks in README.md.
 name: monibot
 
 x-app-env: &app-env
@@ -88,12 +92,13 @@ services:
     # Dev mode (keys devkey/secret). For a deployment, mount a livekit.yaml with real keys.
     # Host networking: WebRTC media through rootless/bridge UDP port forwarding fails the DTLS
     # handshake after ICE connects ("connect timeout after ICE connected"). Linux hosts only.
-    image: docker.io/livekit/livekit-server:latest
+    image: docker.io/livekit/livekit-server:v1.13.10
     command: ["--dev", "--bind", "0.0.0.0"]
     network_mode: host
 
   synapse:
-    image: docker.io/matrixdotorg/synapse:latest
+    # 1.163.0 as tested; the v1.163.0 tag points to a different build, so pin the digest.
+    image: docker.io/matrixdotorg/synapse@sha256:97665cd4539dcf107c69fb6afdb720e1d1c9c09fb2b5701fb13d6c33b22cd8f0
     entrypoint: ["/bin/sh", "/config/start.sh"]
     environment:
       MATRIX_AS_TOKEN: ${MATRIX_AS_TOKEN:?set MATRIX_AS_TOKEN in .env}
@@ -106,7 +111,8 @@ services:
 
   lk-jwt-service:
     # Issues LiveKit tokens to Element Call users from their Matrix OpenID token (MSC4195).
-    image: ghcr.io/element-hq/lk-jwt-service:latest
+    # Rust build tested with Element Call v0.28.0 (newer than the 0.4.4 tag): pinned by digest.
+    image: ghcr.io/element-hq/lk-jwt-service@sha256:2c985ab98de8da3b101c09fb597404dcb2723bb984b1ee20a430a8bb4f6a51a9
     environment:
       LIVEKIT_JWT_PORT: "8080"
       LIVEKIT_URL: ws://localhost:7880
@@ -116,7 +122,7 @@ services:
     ports: ["8080:8080"]
 
   element-call:
-    image: ghcr.io/element-hq/element-call:latest
+    image: ghcr.io/element-hq/element-call:v0.28.0
     volumes: [./element-call/config.json:/app/config.json:ro]
     ports: ["8090:8080"]
 
@@ -128,6 +134,12 @@ services:
       API_PORT: "3001"
       LIVEKIT_URL: ws://host.docker.internal:7880
       LIVEKIT_PUBLIC_URL: ${LIVEKIT_PUBLIC_URL:-ws://localhost:7880}
+      # Publishes the agent's MatrixRTC membership so Element Call shows it.
+      MATRIX_HOMESERVER_URL: http://synapse:8008
+      # Students' browsers cannot resolve `synapse`: the call credentials carry these instead.
+      MATRIX_PUBLIC_URL: ${MATRIX_PUBLIC_URL:-http://127.0.0.1:8008}
+      ELEMENT_CALL_URL: ${ELEMENT_CALL_URL:-http://127.0.0.1:8090}
+      MATRIX_AS_TOKEN: ${MATRIX_AS_TOKEN:?set MATRIX_AS_TOKEN in .env}
     extra_hosts: ["host.docker.internal:host-gateway"]
     depends_on:
       postgres: { condition: service_healthy }

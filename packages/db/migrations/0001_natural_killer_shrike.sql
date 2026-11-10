@@ -1,0 +1,1 @@
+ALTER TABLE "tutoring_sessions" DROP CONSTRAINT "tutoring_sessions_livekit_room_name_unique";

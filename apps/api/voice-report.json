@@ -1,0 +1,217 @@
+{
+  "baseUrl": "http://localhost:3001",
+  "passed": 35,
+  "failed": 0,
+  "results": [
+    {
+      "name": "health responds with the success envelope",
+      "ok": true,
+      "status": 200,
+      "durationMs": 4
+    },
+    {
+      "name": "unknown route returns 404 NOT_FOUND envelope",
+      "ok": true,
+      "status": 404,
+      "durationMs": 0
+    },
+    {
+      "name": "protected route without a session returns 401 UNAUTHORIZED",
+      "ok": true,
+      "status": 401,
+      "durationMs": 15
+    },
+    {
+      "name": "Better Auth sign-up issues sessions for a student and a researcher",
+      "ok": true,
+      "status": 200,
+      "durationMs": 188
+    },
+    {
+      "name": "student cannot create a session (403 FORBIDDEN)",
+      "ok": true,
+      "status": 403,
+      "durationMs": 4
+    },
+    {
+      "name": "invalid session payload returns 400 VALIDATION_ERROR with details",
+      "ok": true,
+      "status": 400,
+      "durationMs": 5
+    },
+    {
+      "name": "researcher creates sessions with explicit experimental flags",
+      "ok": true,
+      "status": 201,
+      "durationMs": 9
+    },
+    {
+      "name": "student lists sessions",
+      "ok": true,
+      "status": 200,
+      "durationMs": 5
+    },
+    {
+      "name": "agent reads session flags with x-agent-secret",
+      "ok": true,
+      "status": 200,
+      "durationMs": 2
+    },
+    {
+      "name": "malformed session id returns 400 VALIDATION_ERROR",
+      "ok": true,
+      "status": 400,
+      "durationMs": 1
+    },
+    {
+      "name": "missing session returns 404 NOT_FOUND",
+      "ok": true,
+      "status": 404,
+      "durationMs": 1
+    },
+    {
+      "name": "telemetry rejects a wrong agent secret (401)",
+      "ok": true,
+      "status": 401,
+      "durationMs": 0
+    },
+    {
+      "name": "telemetry persists turns for both RAG conditions",
+      "ok": true,
+      "status": 201,
+      "durationMs": 7
+    },
+    {
+      "name": "telemetry enforces ragLatencyMs = 0 when RAG is disabled (422)",
+      "ok": true,
+      "status": 422,
+      "durationMs": 1
+    },
+    {
+      "name": "student submits SUS/TAM evaluation and gets the official SUS score",
+      "ok": true,
+      "status": 201,
+      "durationMs": 5
+    },
+    {
+      "name": "duplicate evaluation by the same student returns 409 CONFLICT",
+      "ok": true,
+      "status": 409,
+      "durationMs": 2
+    },
+    {
+      "name": "avatar score on an audio-only session returns 422",
+      "ok": true,
+      "status": 422,
+      "durationMs": 2
+    },
+    {
+      "name": "analytics returns all four design cells with aggregates",
+      "ok": true,
+      "status": 200,
+      "durationMs": 13
+    },
+    {
+      "name": "student cannot read analytics (403)",
+      "ok": true,
+      "status": 403,
+      "durationMs": 2
+    },
+    {
+      "name": "export returns CSV evaluations and JSON interactions",
+      "ok": true,
+      "status": 200,
+      "durationMs": 11
+    },
+    {
+      "name": "matrix webhook rejects a wrong token (401)",
+      "ok": true,
+      "status": 401,
+      "durationMs": 0
+    },
+    {
+      "name": "matrix webhook ignores rooms without an open session",
+      "ok": true,
+      "status": 200,
+      "durationMs": 3
+    },
+    {
+      "name": "matrix appservice transaction rejects a wrong homeserver token (401)",
+      "ok": true,
+      "status": 401,
+      "durationMs": 0
+    },
+    {
+      "name": "matrix appservice accepts a transaction batch and answers {} per the Matrix spec",
+      "ok": true,
+      "status": 200,
+      "durationMs": 2
+    },
+    {
+      "name": "matrix webhook ignores the agent’s own membership (no dispatch loop)",
+      "ok": true,
+      "status": 200,
+      "durationMs": 0
+    },
+    {
+      "name": "agent presence rejects a missing agent secret (401)",
+      "ok": true,
+      "status": 401,
+      "durationMs": 0
+    },
+    {
+      "name": "agent presence is a no-op for a session without a Matrix room",
+      "ok": true,
+      "status": 200,
+      "durationMs": 1
+    },
+    {
+      "name": "matrix webhook dispatches the agent for a linked room (or 503 if LiveKit is down)",
+      "ok": true,
+      "status": 200,
+      "durationMs": 5023
+    },
+    {
+      "name": "LiveKit token endpoint issues a token (or 503 if LiveKit is down)",
+      "ok": true,
+      "status": 200,
+      "durationMs": 4
+    },
+    {
+      "name": "document ingestion indexes (or fails visibly with 503 if Ollama is down)",
+      "ok": true,
+      "status": 201,
+      "durationMs": 145
+    },
+    {
+      "name": "an E2EE key without a Matrix room is rejected (400)",
+      "ok": true,
+      "status": 400,
+      "durationMs": 2
+    },
+    {
+      "name": "an encrypted session never exposes its key and stores it sealed",
+      "ok": true,
+      "status": 201,
+      "durationMs": 8
+    },
+    {
+      "name": "the E2EE key endpoint rejects callers without the agent secret (401)",
+      "ok": true,
+      "status": 401,
+      "durationMs": 0
+    },
+    {
+      "name": "the agent reads the call key; ending the session erases it",
+      "ok": true,
+      "status": 200,
+      "durationMs": 3015
+    },
+    {
+      "name": "researcher ends a session",
+      "ok": true,
+      "status": 200,
+      "durationMs": 3023
+    }
+  ]
+}

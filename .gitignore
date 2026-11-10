@@ -22,6 +22,9 @@ dist/
 build/
 *.tsbuildinfo
 
+# local demo state (Caddy CA private key, generated configs)
+docker/demo/.data/
+
 # env
 .env
 .env.*
@@ -32,6 +35,9 @@ coverage/
 
 # local data
 docker/data/
+
+#personal
+apresentacao
 
 # misc
 .DS_Store

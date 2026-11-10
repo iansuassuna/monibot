@@ -57,3 +57,17 @@ export function useLivekitToken(sessionId: string) {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: sessionKeys.detail(sessionId) }),
   })
 }
+
+/**
+ * Matrix login and call password for joining the session's call in embedded Element Call.
+ * A mutation, not a query: every call issues a new device (revoking the previous one), so it
+ * must never be refetched or cached.
+ */
+export function useMatrixCallCredentials(sessionId: string) {
+  return useMutation({
+    mutationFn: async () =>
+      unwrap(
+        await rpc.api.sessions[':id']['matrix-credentials'].$post({ param: { id: sessionId } })
+      ),
+  })
+}

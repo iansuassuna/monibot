@@ -1,5 +1,7 @@
 # Especificação Arquitetural e Plano de Implementação — MoniBot
 
+> **Estado atual (2026-11-10):** este documento é a especificação original. A camada de chamadas evoluiu: a sala do aluno é uma chamada **MatrixRTC** com o Element Call embutido como widget na aplicação web, contas Matrix dos alunos criadas pela API e o avatar como vídeo do agente na chamada. Veja o `README.md` (*How a tutoring call works*, *Through Matrix / Element Call*, *Presenting* e a pendência metodológica no rodapé) e `.claude/rules/05-voice-agent-matrix.md`.
+
 ## 1. Visão Geral do Projeto
 O **MoniBot** é um sistema de monitoria acadêmica virtual inteligente projetado para operar dentro de salas de videoconferência federadas baseadas em **MatrixRTC (MSC4143 / MSC4195)** e **LiveKit SFU**[cite: 1, 2, 7].
 O agente ingressa na chamada como um participante ativo em tempo real, escuta as dúvidas dos estudantes de **Fundamentos de Programação** por voz, consulta uma base de conhecimento vetorizada (**RAG**) composta por notas de aula, listas de exercícios e provas anteriores, e responde em áudio em tempo real com suporte a um avatar visual sincronizado[cite: 1, 2, 3, 4, 5]. Além disso, a plataforma coleta métricas quantitativas de latência de cada etapa do pipeline e aplica questionários qualitativos baseados nas escalas **SUS (System Usability Scale)** e **TAM (Technology Acceptance Model)**[cite: 1, 5, 7].

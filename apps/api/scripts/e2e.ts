@@ -3,12 +3,14 @@
  *
  * Usage: bun --env-file=../../.env scripts/e2e.ts
  * Env: API_BASE_URL (default http://localhost:$API_PORT), AGENT_SECRET, MATRIX_WEBHOOK_SECRET,
- * DATABASE_URL, WEB_ORIGIN, E2E_REPORT_PATH (optional JSON report path).
+ * DATABASE_URL, WEB_ORIGIN, E2E_REPORT_PATH (optional JSON report path), MATRIX_BOT_USER_ID
+ * (default @monibot:localhost), MATRIX_AS_TOKEN and MATRIX_HOMESERVER_URL (default
+ * http://127.0.0.1:8008; without the token the call-room checks skip reading Synapse).
  *
  * Ollama and LiveKit may be offline: the endpoints that need them must then fail with
  * 503 UPSTREAM_UNAVAILABLE, which is asserted instead of the happy path.
  */
-import { createDb, users } from '@monibot/db'
+import { createDb, tutoringSessions, users } from '@monibot/db'
 import { createLogger } from '@monibot/logger'
 import { eq } from 'drizzle-orm'
 
@@ -23,6 +25,7 @@ const required = (name: string) => {
 const baseUrl = process.env.API_BASE_URL ?? `http://localhost:${process.env.API_PORT ?? 3001}`
 const agentSecret = required('AGENT_SECRET')
 const matrixSecret = required('MATRIX_WEBHOOK_SECRET')
+const botUserId = process.env.MATRIX_BOT_USER_ID ?? '@monibot:localhost'
 const webOrigin = required('WEB_ORIGIN')
 const db = createDb(required('DATABASE_URL'), { max: 1 })
 
@@ -179,17 +182,30 @@ await check('researcher creates sessions with explicit experimental flags', asyn
   }>(rag.json)
   assert(ragSession.ragEnabled && ragSession.avatarEnabled, 'defaults must be true/true')
   assert(ragSession.status === 'scheduled', 'new session must be scheduled')
+  assert(
+    (ragSession as { callClient?: string }).callClient === 'element_call',
+    'a Matrix session is recorded as an Element Call session'
+  )
   ragSessionId = ragSession.id
 
   const audio = await call('/api/sessions', {
     cookie: researcher,
-    body: { title: 'E2E LLM only, audio only', ragEnabled: false, avatarEnabled: false },
+    body: {
+      title: 'E2E LLM only, audio only',
+      ragEnabled: false,
+      avatarEnabled: false,
+      createMatrixRoom: false,
+    },
   })
   assert(audio.status === 201, `status ${audio.status}`)
   const audioSession = dataOf<{ id: string; ragEnabled: boolean; avatarEnabled: boolean }>(
     audio.json
   )
   assert(!audioSession.ragEnabled && !audioSession.avatarEnabled, 'flags must persist as false')
+  assert(
+    (audioSession as { callClient?: string }).callClient === 'livekit_web',
+    'a session without a Matrix room is recorded as a direct LiveKit session'
+  )
   audioOnlySessionId = audioSession.id
   return audio.status
 })
@@ -437,12 +453,115 @@ await check(
   }
 )
 
+await check('matrix webhook ignores the agent’s own membership (no dispatch loop)', async () => {
+  const { status, json } = await call('/api/sessions/matrix-webhook', {
+    headers: { authorization: `Bearer ${matrixSecret}` },
+    body: { ...memberEvent(matrixRoomId), sender: botUserId },
+  })
+  assert(status === 200, `status ${status}`)
+  const result = dataOf<{ action: string; reason?: string }>(json)
+  assert(result.action === 'ignored', `action ${result.action}`)
+  assert(result.reason === 'Own MatrixRTC membership', `reason ${result.reason}`)
+  return status
+})
+
+await check('agent presence rejects a missing agent secret (401)', async () => {
+  const { status, json } = await call(`/api/sessions/${ragSessionId}/agent-presence`, {
+    body: { state: 'joined' },
+  })
+  assert(status === 401, `status ${status}`)
+  expectEnvelopeError(json, 'UNAUTHORIZED')
+  return status
+})
+
+await check('agent events relay rejects a caller without the agent secret (401)', async () => {
+  const { status, json } = await call(`/api/sessions/${ragSessionId}/agent-events`, {
+    body: { state: 'idle', at: Date.now() },
+  })
+  assert(status === 401, `status ${status}`)
+  expectEnvelopeError(json, 'UNAUTHORIZED')
+  return status
+})
+
+await check('agent events relay accepts the agent and reports open viewers (202)', async () => {
+  const { status, json } = await call(`/api/sessions/${ragSessionId}/agent-events`, {
+    headers: { 'x-agent-secret': agentSecret },
+    body: { state: 'thinking', at: Date.now() },
+  })
+  assert(status === 202, `status ${status}`)
+  assert(dataOf<{ listeners: number }>(json).listeners === 0, 'no viewers connected')
+  return status
+})
+
+await check('agent events stream requires a signed-in user (401)', async () => {
+  const { status } = await call(`/api/sessions/${ragSessionId}/agent-events`, { method: 'GET' })
+  assert(status === 401, `status ${status}`)
+  return status
+})
+
+await check('agent presence is a no-op for a session without a Matrix room', async () => {
+  const { status, json } = await call(`/api/sessions/${audioOnlySessionId}/agent-presence`, {
+    headers: { 'x-agent-secret': agentSecret },
+    body: { state: 'joined' },
+  })
+  assert(status === 200, `status ${status}`)
+  const result = dataOf<{ matrixMembership: string }>(json)
+  assert(result.matrixMembership === 'not_applicable', `outcome ${result.matrixMembership}`)
+  return status
+})
+
 await check(
-  'matrix webhook dispatches the agent for a linked room (or 503 if LiveKit is down)',
+  'agent presence for a room the homeserver cannot join is not_applicable, not 503 (or 503 if Synapse is down)',
+  async () => {
+    const { status, json } = await call(`/api/sessions/${ragSessionId}/agent-presence`, {
+      headers: { 'x-agent-secret': agentSecret },
+      body: { state: 'heartbeat' },
+    })
+    if (status === 503) expectEnvelopeError(json, 'UPSTREAM_UNAVAILABLE')
+    else {
+      const result = dataOf<{ matrixMembership: string }>(json)
+      assert(result.matrixMembership === 'not_applicable', `outcome ${result.matrixMembership}`)
+    }
+    return status
+  }
+)
+
+await check(
+  'matrix webhook does not dispatch for a member not connected to LiveKit (or 503 if LiveKit is down)',
   async () => {
     const { status, json } = await call('/api/sessions/matrix-webhook', {
       headers: { authorization: `Bearer ${matrixSecret}` },
       body: memberEvent(matrixRoomId),
+    })
+    if (status === 503) expectEnvelopeError(json, 'UPSTREAM_UNAVAILABLE')
+    else {
+      const result = dataOf<{ action: string; reason?: string }>(json)
+      assert(result.action === 'ignored', `action ${result.action}`)
+      assert(result.reason === 'Call member is not connected to LiveKit', `reason ${result.reason}`)
+    }
+    return status
+  }
+)
+
+await check(
+  'matrix webhook dispatches the agent into the call’s LiveKit room (or 503 if LiveKit is down)',
+  async () => {
+    const event = memberEvent(matrixRoomId)
+    const { status, json } = await call('/api/sessions/matrix-webhook', {
+      headers: { authorization: `Bearer ${matrixSecret}` },
+      body: {
+        ...event,
+        content: {
+          ...event.content,
+          foci_preferred: [
+            {
+              type: 'livekit',
+              livekit_service_url: 'https://lk-jwt.monibot.test',
+              livekit_alias: `e2e-call-${crypto.randomUUID().slice(0, 8)}`,
+            },
+          ],
+        },
+      },
     })
     if (status === 503) expectEnvelopeError(json, 'UPSTREAM_UNAVAILABLE')
     else assert(dataOf<{ action: string }>(json).action === 'dispatched', 'action dispatched')
@@ -460,6 +579,14 @@ await check('LiveKit token endpoint issues a token (or 503 if LiveKit is down)',
   return status
 })
 
+// Documents present before this run are never touched by the cleanup.
+const createdDocumentIds: string[] = []
+const knownDocumentIds = new Set(
+  dataOf<{ id: string }[]>(
+    (await call('/api/knowledge/documents', { cookie: researcher })).json
+  ).map((d) => d.id)
+)
+
 await check(
   'document ingestion indexes (or fails visibly with 503 if Ollama is down)',
   async () => {
@@ -473,9 +600,10 @@ await check(
       },
     })
     const list = await call('/api/knowledge/documents', { cookie: student })
-    const document = dataOf<{ title: string; status: string }[]>(list.json).find(
-      (d) => d.title === 'E2E Laços'
-    )
+    const document = dataOf<{ id: string; title: string; status: string }[]>(list.json)
+      .filter((d) => d.title === 'E2E Laços' && !knownDocumentIds.has(d.id))
+      .at(0)
+    if (document) createdDocumentIds.push(document.id)
     if (status === 503) {
       expectEnvelopeError(json, 'UPSTREAM_UNAVAILABLE')
       assert(document?.status === 'failed', `document status ${document?.status}`)
@@ -487,6 +615,202 @@ await check(
   }
 )
 
+const callKey = `e2e-${crypto.randomUUID()}`
+let encryptedSessionId = ''
+
+await check('an E2EE key without a Matrix room is rejected (400)', async () => {
+  const { status, json } = await call('/api/sessions', {
+    cookie: researcher,
+    body: { title: 'E2E key without room', e2eeSharedKey: callKey },
+  })
+  assert(status === 400, `status ${status}`)
+  expectEnvelopeError(json, 'VALIDATION_ERROR')
+  return status
+})
+
+await check('an encrypted session never exposes its key and stores it sealed', async () => {
+  const { status, json, text } = await call('/api/sessions', {
+    cookie: researcher,
+    body: {
+      title: 'E2E encrypted call',
+      matrixRoomId: `${matrixRoomId}e2ee`,
+      e2eeSharedKey: callKey,
+    },
+  })
+  assert(status === 201, `status ${status}: ${text}`)
+  const session = dataOf<{ id: string; e2eeEnabled: boolean }>(json)
+  assert(session.e2eeEnabled, 'e2eeEnabled must be true')
+  assert(!text.includes(callKey), 'create response leaks the key')
+  encryptedSessionId = session.id
+  const list = await call('/api/sessions', { cookie: researcher })
+  assert(!list.text.includes(callKey), 'session list leaks the key')
+  const [row] = await db
+    .select({ sealed: tutoringSessions.e2eeKeyCiphertext })
+    .from(tutoringSessions)
+    .where(eq(tutoringSessions.id, encryptedSessionId))
+  assert(row?.sealed && !row.sealed.includes(callKey), 'key must be stored sealed, not in clear')
+  return status
+})
+
+await check('the E2EE key endpoint rejects callers without the agent secret (401)', async () => {
+  const { status, json } = await call(`/api/sessions/${encryptedSessionId}/e2ee-key`, {
+    cookie: researcher,
+  })
+  assert(status === 401, `status ${status}`)
+  expectEnvelopeError(json, 'UNAUTHORIZED')
+  return status
+})
+
+await check('the agent reads the call key; ending the session erases it', async () => {
+  const keyUrl = `/api/sessions/${encryptedSessionId}/e2ee-key`
+  const agent = { headers: { 'x-agent-secret': agentSecret } }
+  const before = await call(keyUrl, agent)
+  assert(before.status === 200, `status ${before.status}`)
+  assert(dataOf<{ sharedKey: string | null }>(before.json).sharedKey === callKey, 'key round-trip')
+  const ended = await call(`/api/sessions/${encryptedSessionId}/end`, {
+    cookie: researcher,
+    method: 'POST',
+  })
+  assert(ended.status === 200, `end status ${ended.status}`)
+  const after = await call(keyUrl, agent)
+  assert(dataOf<{ sharedKey: string | null }>(after.json).sharedKey === null, 'key must be erased')
+  return after.status
+})
+
+let ownRoomSessionId = ''
+let ownRoomId = ''
+const homeserverUrl = process.env.MATRIX_HOMESERVER_URL ?? 'http://127.0.0.1:8008'
+const asToken = process.env.MATRIX_AS_TOKEN
+
+/** Room state as the appservice bot, to check what the API created. */
+async function botRoomState(roomId: string) {
+  const url = new URL(`/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/state`, homeserverUrl)
+  url.searchParams.set('user_id', botUserId)
+  const response = await fetch(url, { headers: { authorization: `Bearer ${asToken}` } })
+  const body: unknown = await response.json().catch(() => undefined)
+  return { status: response.status, events: Array.isArray(body) ? body : [] }
+}
+
+await check(
+  'a session without a linked call gets its own encrypted Matrix call room (or 503 if Synapse is down)',
+  async () => {
+    const { status, json, text } = await call('/api/sessions', {
+      cookie: researcher,
+      body: { title: 'E2E sala criada pela API' },
+    })
+    if (status === 503) {
+      expectEnvelopeError(json, 'UPSTREAM_UNAVAILABLE')
+      return status
+    }
+    assert(status === 201, `status ${status}: ${text}`)
+    const session = dataOf<{ id: string; matrixRoomId: string | null; e2eeEnabled: boolean }>(json)
+    assert(session.matrixRoomId?.startsWith('!'), 'a room ID')
+    assert(session.e2eeEnabled, 'the call password must be stored')
+    ownRoomSessionId = session.id
+    ownRoomId = session.matrixRoomId ?? ''
+    if (!asToken) return status
+    const state = await botRoomState(ownRoomId)
+    assert(state.status === 200, `room state status ${state.status}`)
+    const content = (type: string) =>
+      (
+        state.events.find((event: { type?: string }) => event.type === type) as
+          | { content?: Record<string, unknown> }
+          | undefined
+      )?.content
+    assert(content('m.room.join_rules')?.join_rule === 'invite', 'invite-only room')
+    const events = content('m.room.power_levels')?.events as Record<string, number> | undefined
+    assert(events?.['org.matrix.msc3401.call.member'] === 0, 'members may publish call memberships')
+    return status
+  }
+)
+
+let issuedAccessToken = ''
+
+async function matrixWhoamiStatus(accessToken: string) {
+  const response = await fetch(new URL('/_matrix/client/v3/account/whoami', homeserverUrl), {
+    headers: { authorization: `Bearer ${accessToken}` },
+  })
+  return response.status
+}
+
+await check('call credentials require a signed-in user (401)', async () => {
+  const { status } = await call(`/api/sessions/${audioOnlySessionId}/matrix-credentials`, {
+    method: 'POST',
+  })
+  assert(status === 401, `status ${status}`)
+  return status
+})
+
+await check('call credentials are refused for a session without a Matrix room (409)', async () => {
+  const { status, json } = await call(`/api/sessions/${audioOnlySessionId}/matrix-credentials`, {
+    cookie: student,
+    method: 'POST',
+  })
+  assert(status === 409, `status ${status}`)
+  expectEnvelopeError(json, 'CONFLICT')
+  return status
+})
+
+await check(
+  'a student gets a working Matrix login for the call room, never cached (or 503 if Synapse is down)',
+  async () => {
+    if (!ownRoomSessionId) return 0
+    const { status, json, response } = await call(
+      `/api/sessions/${ownRoomSessionId}/matrix-credentials`,
+      { cookie: student, method: 'POST' }
+    )
+    if (status === 503) {
+      expectEnvelopeError(json, 'UPSTREAM_UNAVAILABLE')
+      return status
+    }
+    assert(status === 200, `status ${status}`)
+    assert(response.headers.get('cache-control') === 'no-store', 'credentials must not be cached')
+    const credentials = dataOf<{
+      userId: string
+      accessToken: string
+      roomId: string
+      callPassword: string | null
+    }>(json)
+    assert(credentials.userId.startsWith('@aluno-'), `student namespace, got ${credentials.userId}`)
+    assert(credentials.roomId === ownRoomId, 'the session call room')
+    assert(credentials.callPassword !== null, 'the call password')
+    assert((await matrixWhoamiStatus(credentials.accessToken)) === 200, 'the login works')
+    issuedAccessToken = credentials.accessToken
+    return status
+  }
+)
+
+await check('ending a session closes the call room the API created', async () => {
+  if (!ownRoomSessionId) return 0
+  const { status } = await call(`/api/sessions/${ownRoomSessionId}/end`, {
+    cookie: researcher,
+    method: 'POST',
+  })
+  assert(status === 200, `end status ${status}`)
+  if (!asToken) return status
+  // A user who left can still read the state as of leaving, so check the bot's joined rooms.
+  const url = new URL('/_matrix/client/v3/joined_rooms', homeserverUrl)
+  url.searchParams.set('user_id', botUserId)
+  const response = await fetch(url, { headers: { authorization: `Bearer ${asToken}` } })
+  const joined = ((await response.json()) as { joined_rooms?: string[] }).joined_rooms ?? []
+  assert(!joined.includes(ownRoomId), 'the bot is still in the room')
+  return status
+})
+
+await check('ending the session revokes the issued Matrix login and refuses new ones', async () => {
+  if (!ownRoomSessionId) return 0
+  if (issuedAccessToken) {
+    const whoami = await matrixWhoamiStatus(issuedAccessToken)
+    assert(whoami === 401, `the issued token still works (whoami ${whoami})`)
+  }
+  const { status } = await call(`/api/sessions/${ownRoomSessionId}/matrix-credentials`, {
+    cookie: student,
+    method: 'POST',
+  })
+  assert(status === 409, `status ${status}`)
+  return status
+})
+
 await check('researcher ends a session', async () => {
   const { status, json } = await call(`/api/sessions/${audioOnlySessionId}/end`, {
     cookie: researcher,
@@ -496,6 +820,25 @@ await check('researcher ends a session', async () => {
   assert(dataOf<{ status: string }>(json).status === 'ended', 'ended')
   return status
 })
+
+// Fixture sessions point at fake Matrix rooms; left open, the web app lists them as joinable and
+// their agent cannot publish its Matrix presence. Ended even when checks above failed.
+for (const id of [ragSessionId, audioOnlySessionId, encryptedSessionId, ownRoomSessionId].filter(
+  Boolean
+)) {
+  const { status } = await call(`/api/sessions/${id}/end`, { cookie: researcher, method: 'POST' })
+  if (status !== 200) logger.warn('Could not end an e2e fixture session', { sessionId: id, status })
+}
+
+// The fixture document would otherwise compete with the course material in every RAG retrieval.
+for (const id of createdDocumentIds) {
+  const { status } = await call(`/api/knowledge/documents/${id}`, {
+    cookie: researcher,
+    method: 'DELETE',
+  })
+  if (status !== 200)
+    logger.warn('Could not delete an e2e fixture document', { documentId: id, status })
+}
 
 await db.$client.end()
 
