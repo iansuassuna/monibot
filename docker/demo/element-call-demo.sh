@@ -13,26 +13,16 @@
 #   browser-facing Element Call config points at 127.0.0.1.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-DATA="$ROOT/docker/demo/.data"
-RUNTIME="${CONTAINER_RUNTIME:-podman}"
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 TLS_PROXY=monibot-fed-tls
 LK_JWT=monibot-lk-jwt
 ELEMENT_CALL=monibot-element-call
-SYNAPSE=monibot-synapse
 
 # Same pins as docker/docker-compose.yml (versions verified together).
 LK_JWT_IMAGE=ghcr.io/element-hq/lk-jwt-service@sha256:2c985ab98de8da3b101c09fb597404dcb2723bb984b1ee20a430a8bb4f6a51a9
 ELEMENT_CALL_IMAGE=ghcr.io/element-hq/element-call:v0.28.0
 CADDY_IMAGE=docker.io/library/caddy:2.11.9
-
-# Reads one KEY=value from .env without sourcing it (values may contain unquoted spaces).
-env_value() {
-  local value
-  value="$(grep -E "^$1=" "$ROOT/.env" 2>/dev/null | tail -1 | cut -d= -f2-)"
-  printf '%s' "${value:-$2}"
-}
 
 system_ca_bundle() {
   local candidate
@@ -48,38 +38,6 @@ system_ca_bundle() {
 
 remove_container() {
   "$RUNTIME" rm -f "$1" >/dev/null 2>&1 || true
-}
-
-wait_for() {
-  local description="$1"; shift
-  for _ in $(seq 1 30); do
-    "$@" >/dev/null 2>&1 && { echo "  ok  $description"; return 0; }
-    sleep 1
-  done
-  echo "  FAIL $description" >&2
-  return 1
-}
-
-# Whether Synapse's route to the host works, with or without the API running: a refused connection
-# means the host answered (nothing on :3001 yet); a stale route after a network change times out.
-synapse_reaches_host() {
-  "$RUNTIME" exec "$SYNAPSE" python -c "
-import socket, sys
-s = socket.socket()
-s.settimeout(3)
-try:
-    s.connect(('host.containers.internal', 3001))
-except ConnectionRefusedError:
-    pass
-except OSError:
-    sys.exit(1)
-" >/dev/null 2>&1
-}
-
-synapse_reaches_api() {
-  "$RUNTIME" exec "$SYNAPSE" python -c \
-    "import urllib.request as u; u.urlopen('http://host.containers.internal:3001/api/health', timeout=3)" \
-    >/dev/null 2>&1
 }
 
 run_lk_jwt() {
@@ -143,6 +101,10 @@ up() {
   wait_for "Synapse reaches the host (appservice path)" synapse_reaches_host
   if curl -fsS -m 3 http://127.0.0.1:3001/api/health >/dev/null 2>&1; then
     wait_for "Synapse reaches the MoniBot API on :3001" synapse_reaches_api
+    # A restarted Synapse retries queued call memberships only after a new event arrives.
+    if [ "$(appservice_state)" = "down" ]; then
+      wake_appservice && WAIT_SECONDS=30 wait_for "Synapse delivering to the API again" appservice_is_up
+    fi
   else
     echo "  ..  MoniBot API not running yet: start it with \`bun run dev:full\`"
   fi

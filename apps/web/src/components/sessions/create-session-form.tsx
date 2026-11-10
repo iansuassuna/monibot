@@ -29,6 +29,7 @@ export function CreateSessionForm() {
       avatarEnabled: true,
       llmModel: undefined,
       e2eeSharedKey: null,
+      createMatrixRoom: true,
     },
   })
   const { errors } = form.formState
@@ -71,7 +72,9 @@ export function CreateSessionForm() {
             {errors.title && <p className="text-destructive text-xs">Informe um título.</p>}
           </div>
           <div className="flex flex-col gap-2 md:col-span-2">
-            <Label htmlFor="elementCallLink">Link da chamada Element Call (opcional)</Label>
+            <Label htmlFor="elementCallLink">
+              Vincular a uma chamada Element Call existente (opcional)
+            </Label>
             <Input
               id="elementCallLink"
               ref={callLinkRef}
@@ -112,6 +115,26 @@ export function CreateSessionForm() {
                 setValueAs: (value: unknown) =>
                   typeof value === 'string' && value.trim() !== '' ? value.trim() : undefined,
               })}
+            />
+          </div>
+          <div className="flex items-center justify-between gap-4 rounded-lg border p-3 md:col-span-2">
+            <div>
+              <Label htmlFor="createMatrixRoom">Criar sala Matrix (Element Call)</Label>
+              <p className="text-muted-foreground text-xs">
+                Sem link de chamada, o MoniBot cria uma sala Matrix com chamada criptografada para a
+                sessão.
+              </p>
+            </div>
+            <Controller
+              control={form.control}
+              name="createMatrixRoom"
+              render={({ field }) => (
+                <Switch
+                  id="createMatrixRoom"
+                  checked={field.value ?? true}
+                  onCheckedChange={field.onChange}
+                />
+              )}
             />
           </div>
           <div className="flex items-center justify-between gap-4 rounded-lg border p-3">

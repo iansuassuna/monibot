@@ -25,14 +25,17 @@ const initialState = {
   lastEventAt: 0,
 }
 
-/** Real-time agent state received on the LiveKit DataChannel (`AGENT_STATE_TOPIC`). */
+/**
+ * Real-time agent state, from the LiveKit DataChannel (`AGENT_STATE_TOPIC`) in a direct LiveKit
+ * room or from the API's SSE stream in an Element Call room.
+ */
 export const useAgentStateStore = create<AgentStateStore>()(
   devtools(
     (set) => ({
       ...initialState,
       applyEvent: (event) =>
         set((current) => {
-          // DataChannel delivery is reliable but not ordered across reconnects.
+          // Neither DataChannel nor SSE delivery is ordered across reconnects.
           if (event.at < current.lastEventAt) return current
           const transcript = [...current.transcript]
           const turnId = event.turnId ?? String(event.at)

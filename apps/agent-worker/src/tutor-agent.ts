@@ -1,4 +1,6 @@
+import { type ReadableStream, TransformStream } from 'node:stream/web'
 import { type llm, voice } from '@livekit/agents'
+import type { AudioFrame } from '@livekit/rtc-node'
 import { createLogger } from '@monibot/logger'
 import {
   type AgentSource,
@@ -10,6 +12,7 @@ import {
 } from '@monibot/types'
 import type { AgentStatePublisher } from './agent-state-publisher'
 import { retrieveChunks } from './api-client'
+import type { MouthEnvelope } from './avatar/mouth-envelope'
 import type { TurnTracker } from './turn-tracker'
 
 const logger = createLogger('TutorAgent')
@@ -20,6 +23,8 @@ interface TutorAgentOptions {
   publisher: AgentStatePublisher
   tracker: TurnTracker
   onSources: (sources: AgentSource[]) => void
+  /** Set when the avatar video is on: records each reply's loudness to drive the mouth. */
+  mouth?: MouthEnvelope
 }
 
 /**
@@ -33,6 +38,24 @@ export class TutorAgent extends voice.Agent {
   constructor(options: TutorAgentOptions) {
     super({ instructions: buildTutorSystemPrompt() })
     this.options = options
+  }
+
+  override async ttsNode(
+    text: ReadableStream<string> | AsyncIterable<string>,
+    modelSettings: voice.ModelSettings
+  ): Promise<ReadableStream<AudioFrame> | null> {
+    const audio = await voice.Agent.default.ttsNode(this, text, modelSettings)
+    const { mouth } = this.options
+    if (!audio || !mouth) return audio
+    mouth.beginSpeech()
+    return audio.pipeThrough(
+      new TransformStream<AudioFrame, AudioFrame>({
+        transform(frame, controller) {
+          mouth.append(frame.data, frame.sampleRate, frame.channels)
+          controller.enqueue(frame)
+        },
+      })
+    )
   }
 
   override async onUserTurnCompleted(

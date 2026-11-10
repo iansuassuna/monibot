@@ -19,6 +19,7 @@ import {
   callFocusFromRoomState,
   isReplayedMembership,
   livekitIdentityOf,
+  pendingMembershipLeaves,
   pollUntil,
 } from '../lib/matrix-rtc'
 import { ensureAgentDispatched, findRoomWithParticipant } from './livekit.service'
@@ -27,6 +28,7 @@ import {
   getRoomState,
   isMatrixAppserviceConfigured,
   joinRoom,
+  listDelayedEvents,
   putDelayedState,
   putState,
   updateDelayedEvent,
@@ -180,8 +182,12 @@ async function publishAgentMembership(
     focus,
     createdTs: Date.now(),
   })
-  const previous = delayedLeaves.get(sessionId)
-  if (previous) await updateDelayedEvent(previous, 'cancel')
+  // Cancel every pending leave of this membership, including those scheduled before an API
+  // restart (lost from `delayedLeaves`), or one would fire later and hide the agent.
+  delayedLeaves.delete(sessionId)
+  for (const delayId of pendingMembershipLeaves(await listDelayedEvents(), roomId, stateKey)) {
+    await updateDelayedEvent(delayId, 'cancel')
+  }
   const delayId = await putDelayedState(
     roomId,
     AGENT_CALL_MEMBER_EVENT_TYPE,

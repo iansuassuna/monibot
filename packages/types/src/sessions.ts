@@ -3,10 +3,14 @@ import { isoDateTimeSchema, uuidSchema } from './common'
 import {
   AGENT_MATRIX_MEMBERSHIP_OUTCOMES,
   AGENT_PRESENCE_STATES,
+  CALL_CLIENTS,
   TUTORING_SESSION_STATUSES,
 } from './constants'
 
 export const tutoringSessionStatusSchema = z.enum(TUTORING_SESSION_STATUSES)
+
+export const callClientSchema = z.enum(CALL_CLIENTS)
+export type CallClient = z.infer<typeof callClientSchema>
 export type TutoringSessionStatus = z.infer<typeof tutoringSessionStatusSchema>
 
 /** Independent variables of the experiment; fixed for the lifetime of a session. */
@@ -35,6 +39,11 @@ export const createTutoringSessionSchema = experimentalConditionSchema
      * students and encrypt its own audio. Write-only: stored encrypted, never returned.
      */
     e2eeSharedKey: z.string().min(1).max(512).nullable().default(null),
+    /**
+     * Without a linked `matrixRoomId`, the API creates the session's own encrypted MatrixRTC call
+     * room. `false` makes a plain LiveKit session (no Matrix). Ignored when a room is linked.
+     */
+    createMatrixRoom: z.boolean().default(true),
   })
   .refine((input) => input.e2eeSharedKey === null || input.matrixRoomId !== null, {
     message: 'An E2EE key only applies to a session linked to a Matrix room',
@@ -56,6 +65,8 @@ export const tutoringSessionSchema = z.object({
   createdAt: isoDateTimeSchema,
   /** Whether the session holds an Element Call E2EE key (the key itself is never exposed). */
   e2eeEnabled: z.boolean(),
+  /** Client the call ran on; fixed at creation (see `CALL_CLIENTS`). */
+  callClient: callClientSchema,
 })
 export type TutoringSession = z.infer<typeof tutoringSessionSchema>
 
@@ -156,6 +167,23 @@ export const agentPresenceResultSchema = z.object({
   matrixMembership: z.enum(AGENT_MATRIX_MEMBERSHIP_OUTCOMES),
 })
 export type AgentPresenceResult = z.infer<typeof agentPresenceResultSchema>
+
+/**
+ * What a student's page needs to join a session's call through embedded Element Call: a Matrix
+ * login on a device issued for this session (revoked when it ends) and the call password.
+ * Secret: never cached, never logged.
+ */
+export const matrixCallCredentialsSchema = z.object({
+  homeserverUrl: z.url(),
+  elementCallUrl: z.url(),
+  userId: z.string().regex(/^@[^:]+:.+$/),
+  deviceId: z.string().min(1),
+  accessToken: z.string().min(1),
+  roomId: z.string().min(1),
+  /** Element Call shared-key password; null for a linked call without E2EE. */
+  callPassword: z.string().nullable(),
+})
+export type MatrixCallCredentials = z.infer<typeof matrixCallCredentialsSchema>
 
 /** Matrix Application Service transaction pushed by the homeserver (Matrix AS API v1). */
 export const matrixTransactionSchema = z.object({

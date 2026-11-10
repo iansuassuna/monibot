@@ -147,6 +147,6 @@ End-to-end suites (need the running stack; see `README.md`):
 
 ```bash
 bun run test                                        # unit specs in every workspace
-bun run --cwd apps/api test:e2e                     # 37 HTTP checks against a real Postgres
-bun run --cwd apps/agent-worker test:voice-e2e <id> # one spoken turn through LiveKit + models
+bun run --cwd apps/api test:e2e                     # 46 HTTP checks against a real Postgres
+bun run --cwd apps/agent-worker test:voice-e2e <id> # one spoken turn (MatrixRTC or LiveKit, per callClient) + models
 ```

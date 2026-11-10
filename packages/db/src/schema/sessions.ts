@@ -1,4 +1,5 @@
 import {
+  CALL_CLIENTS,
   DEFAULT_LLM_MODEL,
   type RetrievedChunkRef,
   TUTORING_SESSION_STATUSES,
@@ -20,6 +21,8 @@ export const tutoringSessionStatusEnum = pgEnum(
   TUTORING_SESSION_STATUSES
 )
 
+export const callClientEnum = pgEnum('call_client', CALL_CLIENTS)
+
 export const tutoringSessions = pgTable(
   'tutoring_sessions',
   {
@@ -37,6 +40,8 @@ export const tutoringSessions = pgTable(
      * ends. Null for unencrypted or non-Matrix sessions.
      */
     e2eeKeyCiphertext: text('e2ee_key_ciphertext'),
+    /** Methodology flag: the call client, set at creation from whether the session has a Matrix room. */
+    callClient: callClientEnum('call_client').notNull().default('livekit_web'),
     status: tutoringSessionStatusEnum('status').notNull().default('scheduled'),
     startedAt: timestamp('started_at', { withTimezone: true }),
     endedAt: timestamp('ended_at', { withTimezone: true }),

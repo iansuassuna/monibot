@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto'
 import { getDb, type TutoringSessionRow, tutoringSessions } from '@monibot/db'
 import type {
   AgentE2eeKey,
@@ -10,6 +11,7 @@ import { env } from '../env'
 import { HttpError, notFound } from '../lib/http-error'
 import { openSecret, sealSecret } from '../lib/secret-box'
 import { retireSessionAgent } from './livekit.service'
+import { closeCallRoom, createCallRoom } from './matrix-rooms.service'
 
 export const toTutoringSession = (row: TutoringSessionRow): TutoringSession => ({
   id: row.id,
@@ -24,16 +26,38 @@ export const toTutoringSession = (row: TutoringSessionRow): TutoringSession => (
   endedAt: row.endedAt?.toISOString() ?? null,
   createdAt: row.createdAt.toISOString(),
   e2eeEnabled: row.e2eeKeyCiphertext !== null,
+  callClient: row.callClient,
 })
 
+/**
+ * Prefix of the LiveKit room a session gets at creation. A Matrix session adopts the call's own
+ * room (named by lk-jwt-service) once its first member joins.
+ */
+const PLACEHOLDER_ROOM_PREFIX = 'monibot-'
+
+/** Whether the session already knows the LiveKit room its Element Call call runs in. */
+export function hasAdoptedCallRoom(row: TutoringSessionRow): boolean {
+  return row.matrixRoomId !== null && !row.livekitRoomName.startsWith(PLACEHOLDER_ROOM_PREFIX)
+}
+
+/** Element Call's shared-key password for a call room the API creates (128 bits). */
+const newCallPassword = () => randomBytes(16).toString('base64url')
+
 export async function createSession(input: CreateTutoringSession): Promise<TutoringSession> {
-  const { e2eeSharedKey, ...fields } = input
+  const { createMatrixRoom, e2eeSharedKey: linkedCallKey, ...fields } = input
+  let e2eeSharedKey = linkedCallKey
+  if (fields.matrixRoomId === null && createMatrixRoom) {
+    fields.matrixRoomId = await createCallRoom(fields.title)
+    e2eeSharedKey = newCallPassword()
+  }
   const [row] = await getDb()
     .insert(tutoringSessions)
     .values({
       ...fields,
       llmModel: input.llmModel ?? env.OLLAMA_LLM_MODEL,
-      livekitRoomName: `monibot-${crypto.randomUUID()}`,
+      livekitRoomName: `${PLACEHOLDER_ROOM_PREFIX}${crypto.randomUUID()}`,
+      // Students of a Matrix session join through Element Call (embedded or by link).
+      callClient: fields.matrixRoomId === null ? 'livekit_web' : 'element_call',
       e2eeKeyCiphertext: e2eeSharedKey ? await sealSecret(e2eeSharedKey, env.AGENT_SECRET) : null,
     })
     .returning()
@@ -106,5 +130,6 @@ export async function endSession(id: string): Promise<TutoringSession> {
     .where(eq(tutoringSessions.id, id))
     .returning()
   await retireSessionAgent(row.livekitRoomName, id)
+  if (row.matrixRoomId) await closeCallRoom(row.matrixRoomId, id)
   return toTutoringSession(updated ?? row)
 }

@@ -2,7 +2,13 @@ import { createLogger } from '@monibot/logger'
 import type { AgentDispatchMetadata } from '@monibot/types'
 import { AccessToken, AgentDispatchClient, RoomServiceClient } from 'livekit-server-sdk'
 import { env } from '../env'
-import { dispatchSessionId } from '../lib/agent-dispatch'
+import {
+  DISPATCH_JOIN_GRACE_MS,
+  dispatchSessionId,
+  isOrphanedDispatch,
+  MAX_DISPATCH_ATTEMPTS,
+  nextArrivalCheck,
+} from '../lib/agent-dispatch'
 import { upstreamUnavailable } from '../lib/http-error'
 
 const logger = createLogger('LivekitService')
@@ -10,6 +16,8 @@ const logger = createLogger('LivekitService')
 /** `ParticipantInfo_Kind.AGENT` from @livekit/protocol, which livekit-server-sdk does not re-export. */
 const AGENT_PARTICIPANT_KIND = 4
 const PARTICIPANT_TOKEN_TTL = '2h'
+/** Extra wait after the join grace period, so a dispatch past it counts as orphaned. */
+const ARRIVAL_CHECK_MARGIN_MS = 2000
 /** Seconds an agent-only room survives without a human participant. */
 const ROOM_EMPTY_TIMEOUT_S = 300
 
@@ -78,29 +86,104 @@ async function retireAgents(
  * agent. Element Call reuses one LiveKit room per Matrix room, so an agent left over from an
  * earlier session is retired first: it would otherwise log this session's turns under that one.
  */
-export async function ensureAgentDispatched(
+export function ensureAgentDispatched(
   roomName: string,
   metadata: AgentDispatchMetadata
+): Promise<void> {
+  return dispatchAgent(roomName, metadata, 1)
+}
+
+async function dispatchAgent(
+  roomName: string,
+  metadata: AgentDispatchMetadata,
+  attempt: number
 ): Promise<void> {
   try {
     // Dispatch RPCs time out on a room that does not exist yet; createRoom is idempotent.
     await roomClient.createRoom({ name: roomName, emptyTimeout: ROOM_EMPTY_TIMEOUT_S })
-    const existing = await dispatchClient.listDispatch(roomName)
-    const alreadyDispatched = existing.some(
+    const existing = (await dispatchClient.listDispatch(roomName)).find(
       (dispatch) =>
         dispatch.agentName === env.LIVEKIT_AGENT_NAME &&
         dispatchSessionId(dispatch.metadata) === metadata.sessionId
     )
-    if (alreadyDispatched) return
+    if (existing) {
+      const agentInRoom = (await roomClient.listParticipants(roomName)).some(
+        (participant) =>
+          participant.kind === AGENT_PARTICIPANT_KIND &&
+          (metadata.participantIdentity === undefined ||
+            participant.identity === metadata.participantIdentity)
+      )
+      const orphaned = isOrphanedDispatch({
+        createdAtNs: existing.state?.createdAt,
+        agentInRoom,
+        nowMs: Date.now(),
+      })
+      if (!orphaned) return
+      // A restarted worker leaves its dispatch behind; without replacing it no agent ever returns.
+      logger.warn('Replacing an orphaned agent dispatch', {
+        roomName,
+        sessionId: metadata.sessionId,
+      })
+      await dispatchClient.deleteDispatch(existing.id, roomName)
+    }
     await retireAgents(roomName, (sessionId) => sessionId !== metadata.sessionId)
     await dispatchClient.createDispatch(roomName, env.LIVEKIT_AGENT_NAME, {
       metadata: JSON.stringify(metadata),
     })
-    logger.info('Agent dispatched', { roomName, sessionId: metadata.sessionId })
+    logger.info('Agent dispatched', { roomName, sessionId: metadata.sessionId, attempt })
+    watchAgentArrival(roomName, metadata, attempt)
   } catch (error) {
     logger.error('Agent dispatch failed', { roomName, error })
     throw upstreamUnavailable('LiveKit', error)
   }
+}
+
+/**
+ * Checks, once the join grace period has passed, that the dispatched agent actually arrived, and
+ * dispatches again otherwise: LiveKit drops a job no worker took (e.g. one answering late while
+ * another job ends) and removes the dispatch, leaving the student alone in the call.
+ */
+function watchAgentArrival(roomName: string, metadata: AgentDispatchMetadata, attempt: number) {
+  setTimeout(() => {
+    checkAgentArrival(roomName, metadata, attempt).catch((error: unknown) =>
+      logger.warn('Agent arrival check failed', { roomName, sessionId: metadata.sessionId, error })
+    )
+  }, DISPATCH_JOIN_GRACE_MS + ARRIVAL_CHECK_MARGIN_MS)
+}
+
+async function checkAgentArrival(
+  roomName: string,
+  metadata: AgentDispatchMetadata,
+  attempt: number
+): Promise<void> {
+  const participants = await roomClient.listParticipants(roomName)
+  const next = nextArrivalCheck({
+    agentInRoom: participants.some(
+      (participant) =>
+        participant.kind === AGENT_PARTICIPANT_KIND &&
+        (metadata.participantIdentity === undefined ||
+          participant.identity === metadata.participantIdentity)
+    ),
+    studentInRoom: participants.some((participant) => participant.kind !== AGENT_PARTICIPANT_KIND),
+    attempt,
+  })
+  if (next === 'arrived') return
+  if (next === 'give_up') {
+    if (attempt >= MAX_DISPATCH_ATTEMPTS) {
+      logger.error('Agent never joined the call; the student can rejoin to try again', {
+        roomName,
+        sessionId: metadata.sessionId,
+        attempts: attempt,
+      })
+    }
+    return
+  }
+  logger.warn('Agent did not join after its dispatch; dispatching again', {
+    roomName,
+    sessionId: metadata.sessionId,
+    attempt,
+  })
+  await dispatchAgent(roomName, metadata, attempt + 1)
 }
 
 /**

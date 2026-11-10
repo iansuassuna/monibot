@@ -30,6 +30,13 @@ export const agentStateEventSchema = z.object({
 })
 export type AgentStateEvent = z.infer<typeof agentStateEventSchema>
 
+/** Result of relaying an agent event to the session's live viewers (SSE). */
+export const agentEventDeliverySchema = z.object({
+  /** Open viewer streams that received the event. */
+  listeners: z.number().int().nonnegative(),
+})
+export type AgentEventDelivery = z.infer<typeof agentEventDeliverySchema>
+
 /** Millisecond durations measured for one voice turn. */
 export const turnLatencySchema = z.object({
   sttLatencyMs: latencyMsSchema,

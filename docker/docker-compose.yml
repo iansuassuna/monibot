@@ -136,6 +136,9 @@ services:
       LIVEKIT_PUBLIC_URL: ${LIVEKIT_PUBLIC_URL:-ws://localhost:7880}
       # Publishes the agent's MatrixRTC membership so Element Call shows it.
       MATRIX_HOMESERVER_URL: http://synapse:8008
+      # Students' browsers cannot resolve `synapse`: the call credentials carry these instead.
+      MATRIX_PUBLIC_URL: ${MATRIX_PUBLIC_URL:-http://127.0.0.1:8008}
+      ELEMENT_CALL_URL: ${ELEMENT_CALL_URL:-http://127.0.0.1:8090}
       MATRIX_AS_TOKEN: ${MATRIX_AS_TOKEN:?set MATRIX_AS_TOKEN in .env}
     extra_hosts: ["host.docker.internal:host-gateway"]
     depends_on:

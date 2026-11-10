@@ -15,7 +15,7 @@ apps/web/src/
 │   ├── dashboard/knowledge/        # knowledge studio + RAG playground
 │   ├── dashboard/sessions/         # session management
 │   ├── dashboard/analytics/        # scientific telemetry dashboard
-│   ├── room/[sessionId]/           # live tutoring room (LiveKit + avatar)
+│   ├── room/[sessionId]/           # live tutoring room (Element Call widget, or LiveKit + avatar)
 │   └── evaluation/[sessionId]/     # SUS / TAM questionnaire
 ├── components/
 │   ├── ui/                         # shadcn/ui primitives (generated, edit sparingly)
@@ -70,10 +70,17 @@ export function useSessions() {
 
 - Synchronous UI, room controls, and real-time voice/avatar state live in `src/stores/`:
   - `room-store.ts`: connection status, mic/camera toggles, experimental flags of the joined session.
-  - `agent-state-store.ts`: `AgentState` received over the LiveKit DataChannel (`idle | listening | searching_rag | thinking | speaking`), live transcript, last retrieved sources.
+  - `agent-state-store.ts`: `AgentState` (`idle | listening | searching_rag | thinking | speaking`), live transcript, last retrieved sources — from the LiveKit DataChannel in a direct LiveKit room, or from the API's SSE stream (`AgentEventsListener`, `EventSource` on `rpc…['agent-events'].$url()`) in an Element Call room.
 - Select narrowly: `useRoomStore((s) => s.micEnabled)`. Never subscribe to the whole store.
 - Stores hold no server data (that is Query's job) and no LiveKit objects (keep `Room` in LiveKit's React context).
 - Use `devtools`; `persist` only with an explicit `partialize` whitelist.
+
+## Element Call room (Matrix sessions)
+
+- `TutoringRoom` renders `ElementCallRoom` when the session has a `matrixRoomId`: *Entrar na monitoria* calls `useMatrixCallCredentials` (a mutation — each call is a login, never cache or refetch it), then `ElementCallFrame` hosts Element Call as a **widget** (`src/lib/element-call/`: `widget-url.ts` puts every parameter, the call password included, in the fragment and starts audio-only; `widget-driver.ts` carries out Element Call's widget API requests with the student's Matrix client; `widget-host.ts` loads `matrix-js-sdk`/`matrix-widget-api` on demand). Element Call's hang-up navigates to the evaluation.
+- The driver returns an empty transport list (Element Call then uses its `config.json` focus), rejects sticky events asynchronously (the base class throws synchronously and Element Call would never get an answer), and refuses encrypted to-device (the call uses a shared key; Element Call only logs it).
+- The iframe needs `allow="microphone; camera; display-capture; autoplay; clipboard-write; speaker-selection; screen-wake-lock"`. `ClientWidgetApi.stop()` neither removes its iframe `load` listener nor clears its `contentLoaded` timer, so a host must never be attached to an iframe it no longer owns: `startElementCallHost` takes an `AbortSignal` and quits before attaching (React StrictMode's double effect would otherwise attach a second, stopped host that logs "timed out waiting for contentLoaded" and syncs a Matrix client for nothing), and new credentials remount the iframe (`key`).
+- The avatar condition lives in the call (the agent's video track), not in the page.
 
 ## Forms
 

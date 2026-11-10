@@ -14,6 +14,13 @@ export const KNOWLEDGE_CATEGORIES = [
 
 export const KNOWLEDGE_DOCUMENT_STATUSES = ['processing', 'indexed', 'failed'] as const
 
+/**
+ * How students joined a session's call, recorded for the methodology: data from the two clients
+ * are not directly comparable (the avatar is drawn on the page in `livekit_web`, and is the
+ * agent's video tile in `element_call`, which also adds Element Call's audio path).
+ */
+export const CALL_CLIENTS = ['livekit_web', 'element_call'] as const
+
 export const TUTORING_SESSION_STATUSES = ['scheduled', 'active', 'ended'] as const
 
 /** States the agent broadcasts over the LiveKit DataChannel to drive the avatar. */

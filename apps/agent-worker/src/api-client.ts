@@ -1,8 +1,11 @@
 import {
   type AgentE2eeKey,
+  type AgentEventDelivery,
   type AgentPresenceResult,
   type AgentPresenceState,
+  type AgentStateEvent,
   agentE2eeKeySchema,
+  agentEventDeliverySchema,
   agentPresenceResultSchema,
   type InteractionLogCreate,
   interactionLogSchema,
@@ -69,6 +72,18 @@ export function reportAgentPresence(
     `/api/sessions/${sessionId}/agent-presence`,
     { method: 'POST', body: { state } },
     agentPresenceResultSchema
+  )
+}
+
+/** Relays one live agent event to the pages watching the session (SSE). */
+export function sendAgentEvent(
+  sessionId: string,
+  event: AgentStateEvent
+): Promise<AgentEventDelivery> {
+  return request(
+    `/api/sessions/${sessionId}/agent-events`,
+    { method: 'POST', body: event },
+    agentEventDeliverySchema
   )
 }
 

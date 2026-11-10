@@ -37,6 +37,16 @@ const envSchema = z.object({
     (value) => (value === '' ? undefined : value),
     z.string().min(16, 'MATRIX_AS_TOKEN must be at least 16 characters').optional()
   ),
+  /** Homeserver as reached by browsers (students' Element Call); defaults to MATRIX_HOMESERVER_URL. */
+  MATRIX_PUBLIC_URL: z.preprocess(
+    (value) => (value === '' ? undefined : value),
+    z.url().optional()
+  ),
+  /**
+   * Element Call as reached by browsers. 127.0.0.1, not localhost: under rootless Podman
+   * `localhost` resolves to ::1 and the connection is reset.
+   */
+  ELEMENT_CALL_URL: z.url().default('http://127.0.0.1:8090'),
   /** The appservice's `sender_localpart` user (docker/synapse/monibot-appservice.template.yaml). */
   MATRIX_BOT_USER_ID: z
     .string()

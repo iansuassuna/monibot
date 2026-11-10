@@ -7,5 +7,6 @@
   },
   "livekit": {
     "livekit_service_url": "http://localhost:8080"
-  }
+  },
+  "matrix_rtc_mode": "compatibility"
 }
